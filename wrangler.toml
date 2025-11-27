@@ -4,3 +4,9 @@ compatibility_date = "2025-10-12"
 
 compatibility_flags = ["nodejs_compat"]
 
+[[kv_namespaces]]
+binding = "NEWS_STATE"  # This is the variable name used in the JavaScript code (env.BOT_CONFIG)
+id = "d6c20b095ba34ae1b3c0ddb94873d51f"
+
+[observability]
+enabled = true
