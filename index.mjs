@@ -9,9 +9,9 @@ import moment from 'moment-timezone';
 const HARDCODED_CONFIG = {
     // ⚠️ ඔබේ සත්‍ය දත්ත මගින් ප්‍රතිස්ථාපනය කරන්න.
     TELEGRAM_TOKEN: '8382727460:AAElnR4jEI91tavhJL6uCWiopUKsuZXhlcw',       
-    CHAT_ID_SINHALA: '-1003111341307',             
-    BOT_OWNER_ID: 1901997764, // 🚨 ඔබගේ Personal Telegram ID එක
-    WORKER_BASE_URL: 'https://cfnewsbot2005.deshanchamod174.workers.dev', // 🚨 මෙය වෙනස් කරන්න
+    CHAT_ID_SINHALA: '-1003111341307',             // ප්‍රධාන Channel ID (Ada Derana Posts යැවීමට නොවේ, නමුත් අනෙකුත් functions සඳහා තබා ඇත)
+    BOT_OWNER_ID: 1901997764, // Bot Owner ID (Verification Messages සඳහා)
+    WORKER_BASE_URL: 'https://fbpostbot.deshanchamod174.workers.dev/', // 🚨 මෙය වෙනස් කරන්න
 };
 
 // --- Constants ---
@@ -26,11 +26,13 @@ const ADADERANA_NEWS_URL = 'https://sinhala.adaderana.lk/sinhala-hot-news.php';
 const FALLBACK_DESCRIPTION = "⚠️ සම්පූර්ණ ලිපිය ලබාගැනීමට නොහැකි විය. කරුණාකර වෙබ් අඩවිය පරීක්ෂා කරන්න.";
 
 // --- KV KEYS ---
+// Ada Derana සඳහා අවශ්‍ය KEYS පමණක් තබා ඇත
 const LAST_ERROR_KEY = 'last_critical_error'; 
 const LAST_ERROR_TIMESTAMP = 'last_error_time'; 
 const LAST_ADADERANA_TITLE_KEY = 'last_adaderana_title'; 
+const USER_LANG_PREFIX = 'user_lang_'; // Telegram Command Handler සඳහා තබා ඇත.
 
-// --- START MESSAGE CONSTANTS (Sarala Karana Ladi) ---
+// --- START MESSAGE CONSTANTS ---
 const RAW_START_CAPTION_SI = `👋 <b>ආයුබෝවන්!</b>\n\n` +
                              `💁‍♂️ මේ BOT මගින් <b>Ada Derana</b> හි නවතම පුවත් Facebook වෙත ස්වයංක්‍රීයව පළ කෙරේ.\n\n` +
                              `🎯 මේ BOT පැය 24ම Active එකේ තියෙනවා.🔔.. ✍️\n\n` +
@@ -39,13 +41,12 @@ const RAW_START_CAPTION_SI = `👋 <b>ආයුබෝවන්!</b>\n\n` +
                              `🔥 Mr Chamo Corporation ©\n\n` +
                              `◇───────────────◇`;
 
-
 // =================================================================
 // --- UTILITY FUNCTIONS (KV, Telegram, Facebook) ---
 // =================================================================
 
 /**
- * Posts an image and caption to the Facebook Page using the Graph API.
+ * Posts an image and caption to the Facebook Page using the Graph API. (FIXED: Added URL check and detailed error logging)
  */
 async function postNewsWithImageToFacebook(caption, imageUrl, env) {
     const endpoint = `https://graph.facebook.com/v19.0/${env.FACEBOOK_PAGE_ID}/photos`;
@@ -68,6 +69,7 @@ async function postNewsWithImageToFacebook(caption, imageUrl, env) {
 
     const result = await response.json();
     if (!response.ok) {
+        // Facebook API වෙතින් ලැබෙන දෝෂය සහ අසාර්ථක වූ URL එක Log කරයි
         throw new Error(`Facebook API Error (Image Post) - Failed URL: ${imageUrl} - Error: ${JSON.stringify(result.error)}`);
     }
     console.log(`Facebook Post Successful: ${result.id}`);
@@ -75,7 +77,7 @@ async function postNewsWithImageToFacebook(caption, imageUrl, env) {
 
 
 /**
- * Sends a message to Telegram.
+ * Sends a message to Telegram. (Supports text and photo with fallback)
  */
 async function sendRawTelegramMessage(chatId, message, imgUrl = null, replyMarkup = null, replyToId = null) {
     const TELEGRAM_TOKEN = HARDCODED_CONFIG.TELEGRAM_TOKEN;
@@ -147,8 +149,10 @@ async function sendRawTelegramMessage(chatId, message, imgUrl = null, replyMarku
     return false;  
 }
 
-// KV Read/Write Functions (පෙර පරිදිම ඇත)
-async function readKV(env, key) { /* ... implementation ... */
+/**
+ * Reads data from the KV Namespace.
+ */
+async function readKV(env, key) {
     try {
         if (!env.NEWS_STATE) {
             console.error("KV Binding 'NEWS_STATE' is missing in ENV.");
@@ -164,7 +168,11 @@ async function readKV(env, key) { /* ... implementation ... */
         return null;
     }
 }
-async function writeKV(env, key, value) { /* ... implementation ... */
+
+/**
+ * Writes data to the KV Namespace.
+ */
+async function writeKV(env, key, value) {
     try {
         if (!env.NEWS_STATE) {
             console.error("KV Binding 'NEWS_STATE' is missing in ENV. Write failed.");
@@ -173,6 +181,44 @@ async function writeKV(env, key, value) { /* ... implementation ... */
         await env.NEWS_STATE.put(key, String(value));  
     } catch (e) {
         console.error(`KV Write Error (${key}):`, e);
+    }
+}
+
+/**
+ * Edits the text (caption) and keyboard of an existing message.
+ */
+async function editTelegramMessage(chatId, messageId, newText, replyMarkup = null) {
+    const TELEGRAM_TOKEN = HARDCODED_CONFIG.TELEGRAM_TOKEN;
+    const TELEGRAM_API_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+    const url = `${TELEGRAM_API_URL}/editMessageText`;
+
+    const payload = { 
+        chat_id: chatId, 
+        message_id: messageId, 
+        text: newText, 
+        parse_mode: 'HTML' 
+    };
+
+    if (replyMarkup) {
+        payload.reply_markup = JSON.stringify(replyMarkup);
+    }
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`Telegram Edit Message Error: ${response.status} - ${errorText}`);
+            return false;
+        }
+        return true;
+    } catch (error) {
+        console.error("Error editing message:", error);
+        return false;
     }
 }
 
@@ -191,6 +237,7 @@ async function getLatestAdaDeranaNews() {
     const html = await resp.text();
     const $ = load(html);
     
+    // පුවතේ පළමුම item එක තෝරා ගනී
     const newsStory = $('.news-story').first(); 
     if (newsStory.length === 0) return null;
 
@@ -218,10 +265,11 @@ async function getLatestAdaDeranaNews() {
         const detailHtml = await detailResp.text();
         const $detail = load(detailHtml);
         
+        // Description Scraping: news-content div එකේ p tag වල ඇති සියලුම text එකතු කරයි.
         let paragraphs = [];
-        // Use the correct selector from your screenshots
         $detail('div.news-content p').each((i, el) => { 
             const pText = $detail(el).text().trim();
+            // හිස් හෝ ඉතා කෙටි (20ට අඩු) paragraph හෝ අනවශ්‍ය headers ඉවත් කරයි
             if (pText.length > 20 && !pText.startsWith('24/7')) { 
                  paragraphs.push(pText);
             }
@@ -232,7 +280,7 @@ async function getLatestAdaDeranaNews() {
              description = FALLBACK_DESCRIPTION;
         }
 
-        // Use the correct selector for high quality image
+        // High Quality Image Scraping: news-banner div එකේ ඇති image එක තෝරා ගනී.
         const mainImage = $detail('div.news-banner img').first().attr('src'); 
         if (mainImage) {
             let cleanedImageUrl = mainImage.trim();
@@ -275,30 +323,31 @@ async function fetchAdaDeranaNews(env) {
 
         // --- 1. Description සකස් කිරීම ---
         let cleanDescription = news.description;
-        // Title එක Description එකේ මුල තිබේ නම් එය ඉවත් කරයි.
         if (cleanDescription.startsWith(news.title)) {
             cleanDescription = cleanDescription.substring(news.title.length).trim();
         }
         
         // --- 2. Facebook Post Caption සකස් කිරීම ---
+        // Telegram verification සඳහා link එකද ඇතුලත් කරමු.
         const facebookCaption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n` +
                                 `${news.title}\n\n` +
                                 `${cleanDescription}\n\n` + 
-                                `Source: ${news.link}\n` + // Verification සඳහා Link එක මෙතැනදී ඇතුලත් කරමු.
+                                `Source: ${news.link}\n` + 
                                 `#SriLanka #AdaDerana #BreakingNews`; 
 
-        // --- 3. 🚨 TELEGRAM NOTIFICATION TO OWNER (Full News Verification) 🚨 ---
-        // Facebook Caption එකම Telegram වෙත යවයි (image එක සමඟ).
+        // --- 3. TELEGRAM NOTIFICATION TO OWNER (Full News Verification) ---
         await sendRawTelegramMessage(BOT_OWNER_ID, facebookCaption, news.imgUrl, null);
         console.log(`Sent full news verification to Telegram Owner.`);
         
-        // 🚨 Facebook වෙත Post කිරීමට පෙර, Facebook Caption එකෙන් Source Link එක ඉවත් කරයි.
+        // --- 4. Facebook වෙත Post කිරීමට යැවීම ---
+        // Facebook Post එකට link එක අනිවාර්යයෙන් අවශ්‍ය නම් පමණක් තබන්න.
+        // බොහෝ විට, Facebook Link එක Caption එකේ තිබීමෙන් reach එක අඩු වේ.
+        // Telegram පණිවිඩයේ තිබූ Source Link එක ඉවත් කර final caption එක සකස් කරයි.
         const finalFacebookCaption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n` +
                                      `${news.title}\n\n` +
                                      `${cleanDescription}\n\n` + 
                                      `#SriLanka #AdaDerana #BreakingNews`; 
         
-        // --- 4. Post to Facebook ---
         await postNewsWithImageToFacebook(finalFacebookCaption, news.imgUrl, env);
         
         // --- 5. Store Last Posted Title ---
@@ -319,15 +368,163 @@ async function fetchAdaDeranaNews(env) {
 
 
 // =================================================================
+// --- TELEGRAM WEBHOOK HANDLER (Simplified for Ada Derana Bot) ---
+// =================================================================
+
+/**
+ * Generates the Admin status message. (Simplified)
+ */
+async function generateBotStatusMessage(env) {
+    const lastError = await readKV(env, LAST_ERROR_KEY);
+    const errorTime = await readKV(env, LAST_ERROR_TIMESTAMP);
+    const lastCheckedTitle = await readKV(env, LAST_ADADERANA_TITLE_KEY);
+
+    let statusMessage = `🤖 <b>BOT SYSTEM STATUS (ADMIN VIEW)</b> 🤖\n\n`;
+    statusMessage += `✅ <b>KV Binding:</b> ${env.NEWS_STATE ? 'OK (Active)' : '❌ FAIL (Missing)'}\n`;
+    statusMessage += `📰 <b>Last Posted News:</b> ${lastCheckedTitle ? `<code>${lastCheckedTitle}</code>` : 'None'}\n\n`;
+
+    if (lastError) {
+        statusMessage += `🚨 <b>Last CRITICAL Error</b> (at ${errorTime}):\n` +
+                         `<code>${lastError.substring(0, 500)}...</code>\n\n`; 
+    } else {
+        statusMessage += `✅ <b>Last Error Check:</b> No critical errors recorded.\n\n`;
+    }
+
+    statusMessage += `🔥 <b>Tip:</b> Use 'KV Reset' if the bot is stuck.`;
+    return statusMessage;
+}
+
+
+/**
+ * Executes the final /start message.
+ */
+async function sendFinalStartMessage(chatId, userId, isOwner, messageId, env) {
+    const BOT_OWNER_ID = HARDCODED_CONFIG.BOT_OWNER_ID; 
+    const isEditing = messageId != null;
+
+    const finalCaption = RAW_START_CAPTION_SI;
+
+    let keyboard = [];
+
+    if (isOwner) {
+        const TRIGGER_URL = HARDCODED_CONFIG.WORKER_BASE_URL + '/trigger';
+        
+        keyboard.push(
+            [{ text: '⚡️ Manual Ada Derana Trigger', url: TRIGGER_URL }] 
+        );
+        
+         keyboard.push(
+            [
+                { text: '🤖 BOT STATUS', callback_data: '/botstatus_admin' }, 
+                { text: '♻️ KV RESET', callback_data: '/resetkv_admin' }     
+            ]
+         );
+    }
+    
+    const replyMarkup = { inline_keyboard: keyboard };
+    
+    if (isEditing) {
+         // If a message ID is provided (from a button click), edit it
+        await editTelegramMessage(chatId, messageId, finalCaption, replyMarkup);
+    } else {
+        // Otherwise, send a new message
+        await sendRawTelegramMessage(chatId, finalCaption, null, replyMarkup, null);
+    }
+}
+
+/**
+ * Handles incoming Telegram updates (messages and callback queries).
+ */
+async function handleTelegramUpdate(update, env) {
+    const BOT_OWNER_ID = HARDCODED_CONFIG.BOT_OWNER_ID; 
+
+    if (!update.message && !update.callback_query) {
+        return; 
+    }
+    
+    let userId;
+    let chatId;
+    let messageId;
+    let text = '';
+    
+    if (update.message) {
+        userId = update.message.from.id;
+        chatId = update.message.chat.id; 
+        messageId = update.message.message_id; 
+        text = update.message.text ? update.message.text.trim() : '';
+    } else if (update.callback_query) {
+        userId = update.callback_query.from.id;
+        chatId = update.callback_query.message.chat.id;
+        messageId = update.callback_query.message.message_id;
+        text = update.callback_query.data;
+        
+        // Answer callback query to remove "loading" state
+        await fetch(`https://api.telegram.org/bot${HARDCODED_CONFIG.TELEGRAM_TOKEN}/answerCallbackQuery?callback_query_id=${update.callback_query.id}`);
+    }
+
+    const command = text.split(' ')[0].toLowerCase();
+    
+    const isOwner = (userId === BOT_OWNER_ID);
+
+    // --- COMMAND EXECUTION ---
+    switch (command) {
+        case '/start':
+            await sendFinalStartMessage(chatId, userId, isOwner, null, env);
+            break;
+
+        case '/botstatus_admin': 
+             if (!isOwner) return; // Admin check
+            
+            const statusMessage = await generateBotStatusMessage(env);
+            const backKeyboardStatus = { inline_keyboard: [
+                [{ text: '⬅️ Back to Admin Menu', callback_data: '/start' }]
+            ]};
+            
+            await editTelegramMessage(chatId, messageId, statusMessage, backKeyboardStatus);
+            break;
+            
+        case '/resetkv_admin':
+             if (!isOwner) return; // Admin check
+             
+            if (env.NEWS_STATE) {
+                // Ada Derana specific keys පමණක් reset කරයි
+                await env.NEWS_STATE.delete(LAST_ADADERANA_TITLE_KEY);
+                await env.NEWS_STATE.delete(LAST_ERROR_KEY);
+                await env.NEWS_STATE.delete(LAST_ERROR_TIMESTAMP);
+            }
+            
+            const resetMessage = `✅ <b>KV මතකය සාර්ථකව යළි පිහිටුවන ලදී!</b>\nඅවසන් පුවත් සිරස්තලය සහ දෝෂ සටහන් ඉවත් කර ඇත.\n\n` +
+                `පුවත් ලබා ගැනීම ඊළඟ Scheduled run හෝ /trigger හරහා යළි ආරම්භ වේ.`;
+                
+            const backKeyboardReset = { inline_keyboard: [
+                [{ text: '⬅️ Back to Admin Menu', callback_data: '/start' }]
+            ]};
+            
+            await editTelegramMessage(chatId, messageId, resetMessage, backKeyboardReset);
+            break;
+
+        // /start callback_data එකෙන් back වීම සඳහා
+        case '/back_admin': 
+            await sendFinalStartMessage(chatId, userId, isOwner, messageId, env);
+            break;
+
+        default:
+            if (update.message) {
+                 const defaultReplyText = `පවතින විධානයන් බැලීමට /start යොදන්න.`;
+                 await sendRawTelegramMessage(chatId, defaultReplyText, null, null, messageId); 
+            }
+            break;
+    }
+}
+
+
+// =================================================================
 // --- CLOUDFLARE WORKER HANDLERS ---
-// (Telegram Admin Commands සහ Handlers මෙහිදී භාවිත කළ යුතුය.)
 // =================================================================
 
 async function handleScheduledTasks(env) {
     await fetchAdaDeranaNews(env); 
 }
-
-// (Other helper functions like editTelegramMessage, generateBotStatusMessage, handleTelegramUpdate need to be included)
 
 export default {
     async scheduled(event, env, ctx) {
@@ -340,7 +537,6 @@ export default {
                     const errorMessage = `[${errorTime}] WORKER CRON FAILED: ${error.stack}`;
                     await writeKV(env, LAST_ERROR_KEY, errorMessage);
                     await writeKV(env, LAST_ERROR_TIMESTAMP, errorTime);
-                    // Cron error notification
                     await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, `❌ <b>CRITICAL CRON ERROR!</b>\n\nTime: ${errorTime}\n\nError: <code>${error.message}</code>`, null);
                 }
             })()
@@ -358,7 +554,7 @@ export default {
             
             if (request.method === 'POST') {
                 const update = await request.json();
-                // handleTelegramUpdate(update, env); // (Assuming this is present)
+                await handleTelegramUpdate(update, env); 
                 return new Response('OK', { status: 200 });
             }
 
