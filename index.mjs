@@ -10,14 +10,14 @@ const HARDCODED_CONFIG = {
     // ⚠️ ඔබේ සත්‍ය දත්ත මගින් ප්‍රතිස්ථාපනය කරන්න.
     TELEGRAM_TOKEN: '8382727460:AAElnR4jEI91tavhJL6uCWiopUKsuZXhlcw',       
     CHAT_ID_SINHALA: '-1003111341307',             
-    BOT_OWNER_ID: 1901997764, 
-    WORKER_BASE_URL: 'https://fbpostbot.deshanchamod174.workers.dev/', // 🚨 මෙය වෙනස් කරන්න
+    BOT_OWNER_ID: 1901997764, // 🚨 ඔබගේ Personal Telegram ID එක
+    WORKER_BASE_URL: 'https://cfnewsbot2005.deshanchamod174.workers.dev', // 🚨 මෙය වෙනස් කරන්න
 };
 
 // --- Constants ---
 const COLOMBO_TIMEZONE = 'Asia/Colombo';
 const HEADERS = {  
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
+    'User-Agent': 'Mozilla/50 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
     'Accept-Language': 'en-US,en;q=0.9',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
 };
@@ -50,6 +50,10 @@ const RAW_START_CAPTION_SI = `👋 <b>ආයුබෝවන්!</b>\n\n` +
 async function postNewsWithImageToFacebook(caption, imageUrl, env) {
     const endpoint = `https://graph.facebook.com/v19.0/${env.FACEBOOK_PAGE_ID}/photos`;
     
+    if (!imageUrl || !imageUrl.startsWith('http')) {
+        throw new Error(`Invalid or missing image URL for Facebook Post: ${imageUrl}`);
+    }
+
     const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -64,9 +68,83 @@ async function postNewsWithImageToFacebook(caption, imageUrl, env) {
 
     const result = await response.json();
     if (!response.ok) {
-        throw new Error(`Facebook API Error (Image Post): ${JSON.stringify(result.error)}`);
+        throw new Error(`Facebook API Error (Image Post) - Failed URL: ${imageUrl} - Error: ${JSON.stringify(result.error)}`);
     }
     console.log(`Facebook Post Successful: ${result.id}`);
+}
+
+
+/**
+ * Sends a message to Telegram.
+ */
+async function sendRawTelegramMessage(chatId, message, imgUrl = null, replyMarkup = null, replyToId = null) {
+    const TELEGRAM_TOKEN = HARDCODED_CONFIG.TELEGRAM_TOKEN;
+    if (!TELEGRAM_TOKEN) {
+        console.error("TELEGRAM_TOKEN is missing.");
+        return false;
+    }
+    const TELEGRAM_API_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+    
+    let currentImgUrl = imgUrl; 
+    let apiMethod = currentImgUrl ? 'sendPhoto' : 'sendMessage';
+    let maxAttempts = 3;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        let payload = { chat_id: chatId, parse_mode: 'HTML' };
+
+        if (apiMethod === 'sendPhoto' && currentImgUrl) {
+            payload.photo = currentImgUrl;
+            payload.caption = message; // Use message as caption
+        } else {
+            payload.text = message;
+            apiMethod = 'sendMessage';  
+        }
+        
+        if (replyMarkup) {
+            payload.reply_markup = JSON.stringify(replyMarkup);
+        }
+
+        if (replyToId) {
+            payload.reply_to_message_id = replyToId;
+            payload.allow_sending_without_reply = true;
+        }
+
+        const apiURL = `${TELEGRAM_API_URL}/${apiMethod}`;
+        
+        try {
+            const response = await fetch(apiURL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (response.status === 429) {
+                const delay = Math.pow(2, attempt) * 1000;
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue; 
+            }
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                // If sendPhoto fails, retry as sendMessage (without image)
+                if (apiMethod === 'sendPhoto') {
+                    currentImgUrl = null; 
+                    apiMethod = 'sendMessage';
+                    attempt = -1; // Restart loop as sendMessage
+                    console.error(`SendPhoto failed, retrying as sendMessage: ${errorText}`);
+                    continue; 
+                }
+                console.error(`Telegram API Error (${apiMethod}): ${response.status} - ${errorText}`);
+                break; 
+            }
+            return true; 
+        } catch (error) {
+            console.error("Error sending message to Telegram:", error);
+            const delay = Math.pow(2, attempt) * 1000;
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+    return false;  
 }
 
 // KV Read/Write Functions (පෙර පරිදිම ඇත)
@@ -97,11 +175,10 @@ async function writeKV(env, key, value) { /* ... implementation ... */
         console.error(`KV Write Error (${key}):`, e);
     }
 }
-// (Telegram messaging functions sendRawTelegramMessage, editTelegramMessage are assumed to be present and unchanged)
-// Telegram Functions ඉහත කේතයේ දී ඇති පරිදිම භාවිත කරන්න.
+
 
 // =================================================================
-// --- CORE ADADERANA NEWS LOGIC (Using Cheerio) - 🚨 UPDATE HERE 🚨 ---
+// --- CORE ADADERANA NEWS LOGIC (Using Cheerio) ---
 // =================================================================
 
 async function getLatestAdaDeranaNews() {
@@ -121,7 +198,6 @@ async function getLatestAdaDeranaNews() {
     const title = titleLinkTag.text().trim().replace(/\s{2,}/g, ' ').replace(/&nbsp;/g, ' '); 
     let link = titleLinkTag.attr('href');
     
-    // Thumbnail (as fallback) - This is what you identified in the hot-news page
     const imgTagThumb = newsStory.find('.thumb-image img');
     let imgUrl = imgTagThumb.attr('src'); 
     
@@ -133,7 +209,7 @@ async function getLatestAdaDeranaNews() {
 
     // --- 2. Detail Page Fetch: Description and Higher Quality Image ---
     let description = "";
-    let betterImageUrl = imgUrl; // Start with the thumbnail
+    let betterImageUrl = imgUrl; 
 
     try {
         const detailResp = await fetch(link, { headers: HEADERS });
@@ -142,29 +218,29 @@ async function getLatestAdaDeranaNews() {
         const detailHtml = await detailResp.text();
         const $detail = load(detailHtml);
         
-        // 2a. Description Scraping: 🚨 ඔබගේ screenshot අනුව නිවැරදි selector එක භාවිතා කිරීම
         let paragraphs = [];
+        // Use the correct selector from your screenshots
         $detail('div.news-content p').each((i, el) => { 
             const pText = $detail(el).text().trim();
-            // Filter out empty lines and "24/7" ads/headers if present
             if (pText.length > 20 && !pText.startsWith('24/7')) { 
                  paragraphs.push(pText);
             }
         });
         
-        // පුවත් විස්තරය Title එකත් සමඟ ඇතිනම්, එය ඉවත් කිරීම අවශ්‍ය නොවේ.
         description = paragraphs.join('\n\n').trim();
-        if (description.length < 50) { // If scraping failed to get enough content
+        if (description.length < 50) { 
              description = FALLBACK_DESCRIPTION;
         }
 
-
-        // 2b. High Quality Image Scraping: 🚨 ඔබගේ screenshot අනුව නිවැරදි selector එක භාවිතා කිරීම
+        // Use the correct selector for high quality image
         const mainImage = $detail('div.news-banner img').first().attr('src'); 
         if (mainImage) {
-            // Ada Derana බොහෝ විට Full URLs භාවිත කරන නිසා, base URL එක එකතු කරන්නේ නැත.
-            // එන image URL එක https://s3.amazonaws.com... ලෙස තිබේ.
-            betterImageUrl = mainImage;
+            let cleanedImageUrl = mainImage.trim();
+            if (cleanedImageUrl.startsWith('http')) {
+                 betterImageUrl = cleanedImageUrl;
+            } else if (cleanedImageUrl.startsWith('/')) {
+                 betterImageUrl = `https://sinhala.adaderana.lk${cleanedImageUrl}`;
+            }
         }
 
     } catch (e) {
@@ -176,10 +252,12 @@ async function getLatestAdaDeranaNews() {
 }
 
 // =================================================================
-// --- ADADERANA SCHEDULED TASK (Facebook Posting) - 🚨 UPDATE CAPTION 🚨 ---
+// --- ADADERANA SCHEDULED TASK (Facebook Posting) ---
 // =================================================================
 
 async function fetchAdaDeranaNews(env) {
+    const BOT_OWNER_ID = HARDCODED_CONFIG.BOT_OWNER_ID; 
+
     try {
         const news = await getLatestAdaDeranaNews();
         if (!news) {
@@ -197,21 +275,33 @@ async function fetchAdaDeranaNews(env) {
 
         // --- 1. Description සකස් කිරීම ---
         let cleanDescription = news.description;
-        // විස්තරය Title එකෙන් ආරම්භ වේ නම්, Title එක ඉවත් කිරීම.
+        // Title එක Description එකේ මුල තිබේ නම් එය ඉවත් කරයි.
         if (cleanDescription.startsWith(news.title)) {
             cleanDescription = cleanDescription.substring(news.title.length).trim();
         }
         
-        // --- 2. Construct Message and Post to Facebook ---
-        const caption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n` +
-                        `${news.title}\n\n` +
-                        `${cleanDescription}\n\n` + 
-                        `#SriLanka #AdaDerana #BreakingNews`; 
+        // --- 2. Facebook Post Caption සකස් කිරීම ---
+        const facebookCaption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n` +
+                                `${news.title}\n\n` +
+                                `${cleanDescription}\n\n` + 
+                                `Source: ${news.link}\n` + // Verification සඳහා Link එක මෙතැනදී ඇතුලත් කරමු.
+                                `#SriLanka #AdaDerana #BreakingNews`; 
+
+        // --- 3. 🚨 TELEGRAM NOTIFICATION TO OWNER (Full News Verification) 🚨 ---
+        // Facebook Caption එකම Telegram වෙත යවයි (image එක සමඟ).
+        await sendRawTelegramMessage(BOT_OWNER_ID, facebookCaption, news.imgUrl, null);
+        console.log(`Sent full news verification to Telegram Owner.`);
         
-        // Image URL එක දැන් Detail page එකෙන් ලබාගත් High Quality එක වේ.
-        await postNewsWithImageToFacebook(caption, news.imgUrl, env);
+        // 🚨 Facebook වෙත Post කිරීමට පෙර, Facebook Caption එකෙන් Source Link එක ඉවත් කරයි.
+        const finalFacebookCaption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n` +
+                                     `${news.title}\n\n` +
+                                     `${cleanDescription}\n\n` + 
+                                     `#SriLanka #AdaDerana #BreakingNews`; 
         
-        // --- 3. Store Last Posted Title ---
+        // --- 4. Post to Facebook ---
+        await postNewsWithImageToFacebook(finalFacebookCaption, news.imgUrl, env);
+        
+        // --- 5. Store Last Posted Title ---
         await writeKV(env, LAST_ADADERANA_TITLE_KEY, currentTitle);
         
     } catch (error) {
@@ -221,40 +311,54 @@ async function fetchAdaDeranaNews(env) {
         
         await writeKV(env, LAST_ERROR_KEY, errorMessage);
         await writeKV(env, LAST_ERROR_TIMESTAMP, errorTime);
+        
+        // Error එකක් ආවොත් Owner ට දැනුම් දීම
+         await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, `❌ <b>CRITICAL ERROR!</b> Ada Derana Posting Failed.\n\nTime: ${errorTime}\n\nError: <code>${error.message}</code>`, null);
     }
 }
 
 
 // =================================================================
 // --- CLOUDFLARE WORKER HANDLERS ---
-// (පෙර පරිදිම, Telegram Admin Logic සහ Handlers ඇතුළත් කර ඇත)
+// (Telegram Admin Commands සහ Handlers මෙහිදී භාවිත කළ යුතුය.)
 // =================================================================
 
-// (Handle Scheduled Tasks and Fetch Handlers are assumed to be present and unchanged)
 async function handleScheduledTasks(env) {
     await fetchAdaDeranaNews(env); 
 }
 
+// (Other helper functions like editTelegramMessage, generateBotStatusMessage, handleTelegramUpdate need to be included)
+
 export default {
     async scheduled(event, env, ctx) {
-        // ... (scheduled implementation) ...
+        ctx.waitUntil(
+            (async () => {
+                try {
+                    await handleScheduledTasks(env);
+                } catch (error) {
+                    const errorTime = moment().tz(COLOMBO_TIMEZONE).format('YYYY-MM-DD hh:mm A');
+                    const errorMessage = `[${errorTime}] WORKER CRON FAILED: ${error.stack}`;
+                    await writeKV(env, LAST_ERROR_KEY, errorMessage);
+                    await writeKV(env, LAST_ERROR_TIMESTAMP, errorTime);
+                    // Cron error notification
+                    await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, `❌ <b>CRITICAL CRON ERROR!</b>\n\nTime: ${errorTime}\n\nError: <code>${error.message}</code>`, null);
+                }
+            })()
+        );
     },
 
     async fetch(request, env, ctx) {
-        // ... (fetch implementation including /trigger and POST handler for Telegram) ...
         try {
             const url = new URL(request.url);
 
             if (url.pathname === '/trigger') {
                 await handleScheduledTasks(env);
-                return new Response("Ada Derana Facebook Bot manually triggered. Check Worker Logs.", { status: 200 });
+                return new Response("Ada Derana Facebook Bot manually triggered. Check Worker Logs and Telegram Owner Chat for status.", { status: 200 });
             }
             
             if (request.method === 'POST') {
                 const update = await request.json();
-                // Telegram update handler function එක මෙහිදී කැඳවනු ලැබේ.
-                // (handleTelegramUpdate function එක පෙර කේතයේ තිබූ පරිදිම භාවිත කරන්න)
-                // එය Admin Commands (/botstatus_admin, /resetkv_admin) සඳහා පමණක් අදාල වේ.
+                // handleTelegramUpdate(update, env); // (Assuming this is present)
                 return new Response('OK', { status: 200 });
             }
 
@@ -266,5 +370,3 @@ export default {
         }
     }
 };
-// ⚠️ Note: Telegram utility functions and the handleTelegramUpdate function (which handles /start, /botstatus_admin, etc.) 
-// should be copied from the previous complete code block into this new one for it to be fully functional.
