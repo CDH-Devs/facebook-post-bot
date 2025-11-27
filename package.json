@@ -1,5 +1,5 @@
 {
-  "name": "cf-news-telegram-bot",
+  "name": "fbpostbot",
   "version": "1.0.0",
   "description": "Telegram News Publisher Bot running on Cloudflare Workers",
   "main": "index.js",
