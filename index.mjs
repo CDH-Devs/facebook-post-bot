@@ -48,6 +48,26 @@ const RAW_START_CAPTION_SI = `👋 <b>ආයුබෝවන්!</b>\n\n` +
                              `◇───────────────◇`;
 
 
+// --- Unicode Bold Mapping for Latin and Numeric Characters ---
+const BOLD_MAP = {
+    '0': '𝟎', '1': '𝟏', '2': '𝟐', '3': '𝟑', '4': '𝟒', '5': '𝟓', '6': '𝟔', '7': '𝟕', '8': '𝟖', '9': '𝟗',
+    'a': '𝐚', 'b': '𝐛', 'c': '𝐜', 'd': '𝐝', 'e': '𝐞', 'f': '𝐟', 'g': '𝐠', 'h': '𝐡', 'i': '𝐢', 'j': '𝐣', 'k': '𝐤', 'l': '𝐥', 'm': '𝐦', 'n': '𝐧', 'o': '𝐨', 'p': '𝐩', 'q': '𝐪', 'r': '𝐫', 's': '𝐬', 't': '𝐭', 'u': '𝐮', 'v': '𝐯', 'w': '𝐰', 'x': '𝐱', 'y': '𝐲', 'z': '𝐳',
+    'A': '𝐀', 'B': '𝐁', 'C': '𝐂', 'D': '𝐃', 'E': '𝐄', 'F': '𝐅', 'G': '𝐆', 'H': '𝐇', 'I': '𝐈', 'J': '𝐉', 'K': '𝐊', 'L': '𝐋', 'M': '𝐌', 'N': '𝐍', 'O': '𝐎', 'P': '𝐏', 'Q': '𝐐', 'R': '𝐑', 'S': '𝐒', 'T': '𝐓', 'U': '𝐔', 'V': '𝐕', 'W': '𝐖', 'X': '𝐗', 'Y': '𝐘', 'Z': '𝐙'
+};
+
+/**
+ * Converts standard Latin letters and digits to Unicode Bold characters.
+ * Sinhala characters will remain unchanged.
+ */
+function toUnicodeBold(text) {
+    let result = '';
+    for (const char of text) {
+        // Only attempt to replace if the character is in the BOLD_MAP
+        result += BOLD_MAP[char] || char;
+    }
+    return result;
+}
+
 // =================================================================
 // --- UTILITY FUNCTIONS (KV, Telegram, Facebook) ---
 // =================================================================
@@ -370,8 +390,12 @@ async function checkAndResolvePendingPost(env) {
     
     // Use the latest description to update the caption, as description might also delay loading
     let cleanDescription = currentDescription.startsWith(pending.title) ? currentDescription.substring(pending.title.length).trim() : currentDescription;
-    // 🚨 NEW CHANGE: REMOVED "බ්‍රේකින් නිවුස්" AND BOLDED THE ENTIRE CAPTION
-    pending.caption = `<b>${pending.title}\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews</b>`;
+    
+    // Build the raw caption string - ADDING DOUBLE ANGLE QUOTES FOR VISUAL EMPHASIS ON TITLE
+    const rawCaption = `«${pending.title}»\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews`;
+
+    // 🚨 CHANGE: Apply Unicode Bold (will bold hashtags/Latin letters only)
+    pending.caption = toUnicodeBold(rawCaption);
 
 
     if (reScrapedImage) {
@@ -451,6 +475,9 @@ async function checkForNewAdaDeranaNews(env) {
         const { description: initialDescription } = await reScrapeDetails(news.link);
         let cleanDescription = initialDescription.startsWith(news.title) ? initialDescription.substring(news.title.length).trim() : initialDescription;
 
+        // Build the raw caption string - ADDING DOUBLE ANGLE QUOTES FOR VISUAL EMPHASIS ON TITLE
+        const rawCaption = `«${news.title}»\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews`;
+        
         // --- New PENDING Post Creation ---
         const pendingPost = {
             title: news.title,
@@ -459,8 +486,8 @@ async function checkForNewAdaDeranaNews(env) {
             initialImgUrl: news.imgUrl, // The thumbnail/initial URL
             retries: 0,
             timestamp: moment().tz(COLOMBO_TIMEZONE).toISOString(),
-            // 🚨 NEW CHANGE: REMOVED "බ්‍රේකින් නිවුස්" AND BOLDED THE ENTIRE CAPTION
-            caption: `<b>${news.title}\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews</b>`
+            // 🚨 CHANGE: Apply Unicode Bold (will bold hashtags/Latin letters only)
+            caption: toUnicodeBold(rawCaption)
         };
         
         // Save to PENDING KV and notify owner, then STOP
@@ -510,7 +537,7 @@ async function generateBotStatusMessage(env) {
         statusMessage += `   - Retries: ${pending.retries}/${MAX_RETRIES}\n\n`;
     } else {
         statusMessage += `✅ <b>PENDING POST:</b> None\n`;
-        statusMessage += `📰 <b>Last Posted Title:</b> ${lastCheckedTitle ? `<code>${lastCheckedHeadline}</code>` : 'None'}\n\n`;
+        statusMessage += `📰 <b>Last Posted Title:</b> ${lastCheckedTitle ? `<code>${lastCheckedTitle}</code>` : 'None'}\n\n`;
     }
 
 
@@ -669,9 +696,11 @@ async function handleTelegramUpdate(update, env) {
             }
 
             // Post to Facebook
-            await postNewsWithImageToFacebook(caption, mediaUrl, env);
+            // Convert to Unicode bold before posting manually
+            const finalCaption = toUnicodeBold(caption);
+            await postNewsWithImageToFacebook(finalCaption, mediaUrl, env);
 
-            let successMessage = `✅ **Facebook Post Successful!**\n\nContent Type: ${contentType}\nCaption: <code>${caption.substring(0, 100)}...</code>`;
+            let successMessage = `✅ **Facebook Post Successful!**\n\nContent Type: ${contentType}\nCaption: <code>${finalCaption.substring(0, 100)}...</code>`;
             await sendRawTelegramMessage(chatId, successMessage, null, null, messageId);
 
         } catch (e) {
