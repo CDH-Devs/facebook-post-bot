@@ -27,7 +27,7 @@ const HEADERS = {
 const ADADERANA_NEWS_URL = 'https://sinhala.adaderana.lk/sinhala-hot-news.php'; 
 const FALLBACK_DESCRIPTION = "⚠️ සම්පූර්ණ ලිපිය ලබාගැනීමට නොහැකි විය. කරුණාකර වෙබ් අඩවිය පරීක්ෂා කරන්න.";
 
-// 🚨 NEW: Static Image URL for ultimate fallback
+// 🚨 Static Image URL for ultimate fallback
 const DEFAULT_FALLBACK_IMAGE_URL = 'https://i.postimg.cc/SxcRHnfX/photo-2025-11-28-22-10-46.jpg';
 
 // --- KV KEYS ---
@@ -38,8 +38,9 @@ const PENDING_ADADERANA_POST = 'pending_adaderana_post';
 const USER_LANG_PREFIX = 'user_lang_'; 
 
 // --- START MESSAGE CONSTANTS (Telegram handler සඳහා) ---
+// 🚨 CHANGE 1: START CAPTION UPDATED FOR CDH NEWS
 const RAW_START_CAPTION_SI = `👋 <b>ආයුබෝවන්!</b>\n\n` +
-                             `💁‍♂️ මේ BOT මගින් <b>Ada Derana</b> හි නවතම පුවත් Facebook වෙත ස්වයංක්‍රීයව පළ කෙරේ.\n\n` +
+                             `💁‍♂️ මේ BOT මගින් ඔබගේ <b>CDH News</b> Facebook පිටුව වෙත <b>Ada Derana</b> හි නවතම පුවත් ස්වයංක්‍රීයව පළ කෙරේ.\n\n` +
                              `🎯 මේ BOT පැය 24ම Active එකේ තියෙනවා.🔔.. ✍️\n\n` +
                              `◇───────────────◇\n\n` +
                              `🚀 Developer : @chamoddeshan\n` +
@@ -91,7 +92,6 @@ async function writeKV(env, key, value) {
  */
 async function postNewsWithImageToFacebook(caption, imageUrl, env) {
     
-    // Image URL එකක් තිබේ දැයි පරීක්ෂා කරයි
     const isImagePost = (imageUrl && imageUrl.startsWith('http'));
     
     // Image තිබේ නම් /photos endpoint එකත්, නැතිනම් /feed endpoint එකත් භාවිතා කරයි
@@ -102,13 +102,11 @@ async function postNewsWithImageToFacebook(caption, imageUrl, env) {
     }
     
     const bodyParams = {
-        // 'photos' endpoint එකේදී caption එක 'caption' ලෙසත්, 'feed' endpoint එකේදී 'message' ලෙසත් යැවිය යුතුය.
         [isImagePost ? 'caption' : 'message']: caption,
         access_token: env.FACEBOOK_ACCESS_TOKEN,
     };
     
     if (isImagePost) {
-        // Image Post එකකට 'url' parameter එක යොදයි
         bodyParams.url = imageUrl;
     } 
 
@@ -122,11 +120,36 @@ async function postNewsWithImageToFacebook(caption, imageUrl, env) {
 
     const result = await response.json();
     if (!response.ok) {
-        // දෝෂ පණිවිඩය තුළ භාවිතා කළ endpoint එක සඳහන් කරයි.
         throw new Error(`Facebook API Error (${isImagePost ? 'Image' : 'Text'} Post) - Endpoint: ${isImagePost ? '/photos' : '/feed'} - Failed URL: ${imageUrl || 'N/A'} - Error: ${JSON.stringify(result.error)}`);
     }
     console.log(`Facebook Post Successful: ${result.id}`);
 }
+
+
+/**
+ * Fetches the direct URL for a given Telegram file ID (for images/videos).
+ * @param {string} fileId - The file_id from Telegram message object.
+ * @returns {Promise<string|null>} The direct file URL or null.
+ */
+async function getTelegramFileUrl(fileId) {
+    const TELEGRAM_TOKEN = HARDCODED_CONFIG.TELEGRAM_TOKEN;
+    if (!TELEGRAM_TOKEN || !fileId) return null;
+
+    try {
+        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
+        const result = await response.json();
+
+        if (response.ok && result.ok && result.result.file_path) {
+            const filePath = result.result.file_path;
+            // Direct file download link format
+            return `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
+        }
+    } catch (e) {
+        console.error("Error fetching Telegram file URL:", e);
+    }
+    return null;
+}
+
 
 /**
  * Sends a message to Telegram.
@@ -347,7 +370,8 @@ async function checkAndResolvePendingPost(env) {
     
     // Use the latest description to update the caption, as description might also delay loading
     let cleanDescription = currentDescription.startsWith(pending.title) ? currentDescription.substring(pending.title.length).trim() : currentDescription;
-    pending.caption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${pending.title}\n\n${cleanDescription}\n\n#SriLanka #AdaDerana #BreakingNews`;
+    // 🚨 CHANGE 2: AUTO POST CAPTION UPDATED FOR CDH NEWS HASHTAG
+    pending.caption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${pending.title}\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews`;
 
 
     if (reScrapedImage) {
@@ -435,7 +459,8 @@ async function checkForNewAdaDeranaNews(env) {
             initialImgUrl: news.imgUrl, // The thumbnail/initial URL
             retries: 0,
             timestamp: moment().tz(COLOMBO_TIMEZONE).toISOString(),
-            caption: `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${news.title}\n\n${cleanDescription}\n\n#SriLanka #AdaDerana #BreakingNews`
+            // 🚨 CHANGE 2: AUTO POST CAPTION UPDATED FOR CDH NEWS HASHTAG
+            caption: `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${news.title}\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews`
         };
         
         // Save to PENDING KV and notify owner, then STOP
@@ -554,7 +579,7 @@ async function handleTelegramUpdate(update, env) {
         userId = update.message.from.id;
         chatId = update.message.chat.id; 
         messageId = update.message.message_id; 
-        text = update.message.text ? update.message.text.trim() : '';
+        text = update.message.text || update.message.caption || '';
     } else if (update.callback_query) {
         userId = update.callback_query.from.id;
         chatId = update.callback_query.message.chat.id;
@@ -564,7 +589,7 @@ async function handleTelegramUpdate(update, env) {
         await fetch(`https://api.telegram.org/bot${HARDCODED_CONFIG.TELEGRAM_TOKEN}/answerCallbackQuery?callback_query_id=${update.callback_query.id}`);
     }
 
-    const command = text.split(' ')[0].toLowerCase();
+    const command = update.message && update.message.text ? update.message.text.split(' ')[0].toLowerCase() : text.toLowerCase();
     
     const isOwner = (userId === BOT_OWNER_ID);
 
@@ -604,13 +629,63 @@ async function handleTelegramUpdate(update, env) {
             
             await editTelegramMessage(chatId, messageId, resetMessage, backKeyboardReset);
             break;
+    }
+    
+    
+    // --- 🚨 MANUAL FACEBOOK POSTING LOGIC (Owner Only) 🚨 ---
+    // Check if it's a message (not a callback) and if the user is the owner, and if it's not a recognized command
+    if (isOwner && update.message && !command.startsWith('/')) {
+        
+        let caption = update.message.text || update.message.caption || '';
+        let mediaUrl = null;
+        let fileId = null;
+        let contentType = 'Text';
 
-        default:
-            if (update.message) {
-                 const defaultReplyText = `පවතින විධානයන් බැලීමට /start යොදන්න.`;
-                 await sendRawTelegramMessage(chatId, defaultReplyText, null, null, messageId); 
+        if (update.message.photo) {
+            // Get the largest photo size
+            fileId = update.message.photo.pop().file_id;
+            contentType = 'Photo';
+        } else if (update.message.video) {
+            fileId = update.message.video.file_id;
+            contentType = 'Video';
+        }
+
+        try {
+            if (fileId) {
+                mediaUrl = await getTelegramFileUrl(fileId);
+                
+                if (mediaUrl) {
+                    // 🚨 CHANGE 3: MANUAL POST CAPTION UPDATED FOR CDH NEWS HASHTAG
+                    caption = `${caption}\n\n#CDHNews #ManualPost`;
+                } else {
+                    // Failed to get URL, post as text only
+                    caption = `📣 **Manual Post (File Fetch Failed!)**\n\n${caption}\n\n#CDHNews`;
+                }
+
+            } else if (!caption) {
+                // Ignore empty messages without media
+                await sendRawTelegramMessage(chatId, "⚠️ **Manual Post Failed:** Cannot post an empty message without media.", null, null, messageId);
+                return new Response('OK', { status: 200 }); // Stop processing
             }
-            break;
+
+            // Post to Facebook
+            await postNewsWithImageToFacebook(caption, mediaUrl, env);
+
+            let successMessage = `✅ **Facebook Post Successful!**\n\nContent Type: ${contentType}\nCaption: <code>${caption.substring(0, 100)}...</code>`;
+            await sendRawTelegramMessage(chatId, successMessage, null, null, messageId);
+
+        } catch (e) {
+            let errorMessage = `❌ **Facebook Manual Post Failed!**\n\nContent Type: ${contentType}\nError: <code>${e.message}</code>`;
+            await sendRawTelegramMessage(chatId, errorMessage, null, null, messageId);
+        }
+    }
+    // --- 🚨 END MANUAL FACEBOOK POSTING LOGIC 🚨 ---
+    
+    
+    // Default reply if not a command and not a manual post (and not handled above)
+    if (update.message && !command.startsWith('/')) {
+         const defaultReplyText = `පවතින විධානයන් බැලීමට /start යොදන්න.`;
+         await sendRawTelegramMessage(chatId, defaultReplyText, null, null, messageId); 
     }
 }
 
