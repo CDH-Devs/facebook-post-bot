@@ -27,12 +27,15 @@ const HEADERS = {
 const ADADERANA_NEWS_URL = 'https://sinhala.adaderana.lk/sinhala-hot-news.php'; 
 const FALLBACK_DESCRIPTION = "⚠️ සම්පූර්ණ ලිපිය ලබාගැනීමට නොහැකි විය. කරුණාකර වෙබ් අඩවිය පරීක්ෂා කරන්න.";
 
+// 🚨 NEW: Static Image URL for ultimate fallback
+const DEFAULT_FALLBACK_IMAGE_URL = 'https://i.postimg.cc/SxcRHnfX/photo-2025-11-28-22-10-46.jpg';
+
 // --- KV KEYS ---
 const LAST_ERROR_KEY = 'last_critical_error'; 
 const LAST_ERROR_TIMESTAMP = 'last_error_time'; 
 const LAST_ADADERANA_TITLE_KEY = 'last_adaderana_title'; 
 const PENDING_ADADERANA_POST = 'pending_adaderana_post'; 
-const USER_LANG_PREFIX = 'user_lang_'; // Telegram Command Handler සඳහා තබා ඇත.
+const USER_LANG_PREFIX = 'user_lang_'; 
 
 // --- START MESSAGE CONSTANTS (Telegram handler සඳහා) ---
 const RAW_START_CAPTION_SI = `👋 <b>ආයුබෝවන්!</b>\n\n` +
@@ -57,7 +60,6 @@ async function readKV(env, key) {
             console.error("KV Binding 'NEWS_STATE' is missing in ENV.");
             return null;
         }
-        // KV Read එකේදී JSON parse කිරීමට උත්සාහ කරයි (පෙර තිබූ)
         const value = await env.NEWS_STATE.get(key);  
         if (value === null || value === undefined) {
             return null;
@@ -85,23 +87,28 @@ async function writeKV(env, key, value) {
 }
 
 /**
- * Posts an image and caption to the Facebook Page using the Graph API.
+ * Posts an image or status to the Facebook Page using the Graph API.
  */
 async function postNewsWithImageToFacebook(caption, imageUrl, env) {
-    const endpoint = `https://graph.facebook.com/v19.0/${env.FACEBOOK_PAGE_ID}/photos`;
     
-    let isTextOnly = (!imageUrl || !imageUrl.startsWith('http'));
+    // Image URL එකක් තිබේ දැයි පරීක්ෂා කරයි
+    const isImagePost = (imageUrl && imageUrl.startsWith('http'));
+    
+    // Image තිබේ නම් /photos endpoint එකත්, නැතිනම් /feed endpoint එකත් භාවිතා කරයි
+    const endpoint = `https://graph.facebook.com/v19.0/${env.FACEBOOK_PAGE_ID}/${isImagePost ? 'photos' : 'feed'}`;
     
     if (!env.FACEBOOK_ACCESS_TOKEN || !env.FACEBOOK_PAGE_ID) {
         throw new Error("Missing FACEBOOK_ACCESS_TOKEN or FACEBOOK_PAGE_ID environment variables.");
     }
     
     const bodyParams = {
-        caption: caption,
+        // 'photos' endpoint එකේදී caption එක 'caption' ලෙසත්, 'feed' endpoint එකේදී 'message' ලෙසත් යැවිය යුතුය.
+        [isImagePost ? 'caption' : 'message']: caption,
         access_token: env.FACEBOOK_ACCESS_TOKEN,
     };
     
-    if (!isTextOnly) {
+    if (isImagePost) {
+        // Image Post එකකට 'url' parameter එක යොදයි
         bodyParams.url = imageUrl;
     } 
 
@@ -115,11 +122,11 @@ async function postNewsWithImageToFacebook(caption, imageUrl, env) {
 
     const result = await response.json();
     if (!response.ok) {
-        throw new Error(`Facebook API Error (${isTextOnly ? 'Text' : 'Image'} Post) - Failed URL: ${imageUrl || 'N/A'} - Error: ${JSON.stringify(result.error)}`);
+        // දෝෂ පණිවිඩය තුළ භාවිතා කළ endpoint එක සඳහන් කරයි.
+        throw new Error(`Facebook API Error (${isImagePost ? 'Image' : 'Text'} Post) - Endpoint: ${isImagePost ? '/photos' : '/feed'} - Failed URL: ${imageUrl || 'N/A'} - Error: ${JSON.stringify(result.error)}`);
     }
     console.log(`Facebook Post Successful: ${result.id}`);
 }
-
 
 /**
  * Sends a message to Telegram.
@@ -340,7 +347,6 @@ async function checkAndResolvePendingPost(env) {
     
     // Use the latest description to update the caption, as description might also delay loading
     let cleanDescription = currentDescription.startsWith(pending.title) ? currentDescription.substring(pending.title.length).trim() : currentDescription;
-    // Update the pending object's caption with the latest description
     pending.caption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${pending.title}\n\n${cleanDescription}\n\n#SriLanka #AdaDerana #BreakingNews`;
 
 
@@ -348,7 +354,7 @@ async function checkAndResolvePendingPost(env) {
         // --- SUCCESS POSTING (Image Found) ---
         await postNewsWithImageToFacebook(pending.caption, reScrapedImage, env);
         await writeKV(env, LAST_ADADERANA_TITLE_KEY, pending.title);
-        await env.NEWS_STATE.delete(PENDING_ADADERANA_POST); // Remove pending item
+        await env.NEWS_STATE.delete(PENDING_ADADERANA_POST); 
         
         const successMessage = `🥳 <b>SUCCESS!</b> Ada Derana Post for "${pending.title}" successful.\n(Image resolved on retry ${pending.retries}) - <a href="${pending.link}">View Article</a>`;
         await sendRawTelegramMessage(BOT_OWNER_ID, successMessage, reScrapedImage, null);
@@ -357,25 +363,26 @@ async function checkAndResolvePendingPost(env) {
     } else if (pending.retries >= MAX_RETRIES) {
         // --- FALLBACK (Maximum retries reached) ---
         
-        let finalImage = pending.initialImgUrl; 
+        // 🚨 ULTIMATE FALLBACK: Use the user-defined static image URL
+        let finalImage = DEFAULT_FALLBACK_IMAGE_URL; 
         let finalCaption = pending.caption;
 
-        let fallbackMessage = `⚠️ <b>FALLBACK POST (Max Retries Reached - ${MAX_RETRIES})</b>:\n\nImage for "${pending.title}" failed to resolve.\nPosting with initial thumbnail or text only.`;
+        let fallbackMessage = `⚠️ <b>FALLBACK POST (Max Retries Reached - ${MAX_RETRIES})</b>:\n\nImage for "${pending.title}" failed to resolve.\nPosting with static fallback image.`;
         
         try {
-            // Attempt to post with the fallback image.
+            // Attempt to post with the static fallback image. (Uses /photos endpoint)
             await postNewsWithImageToFacebook(finalCaption, finalImage, env);
-            fallbackMessage += "\n\n✅ Posted successfully using fallback thumbnail.";
+            fallbackMessage += "\n\n✅ Posted successfully using static fallback image.";
         } catch (e) {
-            // If even the fallback fails, try text-only
-            console.error("Fallback image post failed:", e.message);
+            // If the static image post fails, force Text-Only Post by passing null. (Uses /feed endpoint)
+            console.error("Static fallback image post failed, forcing text-only post:", e.message);
             await postNewsWithImageToFacebook(finalCaption, null, env); 
-            fallbackMessage = `❌ <b>CRITICAL FALLBACK ERROR:</b> Failed to post image. Posted text only.\nError: <code>${e.message}</code>`;
+            fallbackMessage = `❌ <b>CRITICAL FALLBACK ERROR:</b> Failed to post static image. Posted text only.\nError: <code>${e.message}</code>`;
         }
         
         await sendRawTelegramMessage(BOT_OWNER_ID, fallbackMessage, null, null);
         await writeKV(env, LAST_ADADERANA_TITLE_KEY, pending.title);
-        await env.NEWS_STATE.delete(PENDING_ADADERANA_POST); // Clear state
+        await env.NEWS_STATE.delete(PENDING_ADADERANA_POST); 
         return;
     } 
 
@@ -586,7 +593,7 @@ async function handleTelegramUpdate(update, env) {
                 await env.NEWS_STATE.delete(LAST_ADADERANA_TITLE_KEY);
                 await env.NEWS_STATE.delete(LAST_ERROR_KEY);
                 await env.NEWS_STATE.delete(LAST_ERROR_TIMESTAMP);
-                await env.NEWS_STATE.delete(PENDING_ADADERANA_POST); // Pending post එකද ඉවත් කරයි
+                await env.NEWS_STATE.delete(PENDING_ADADERANA_POST); 
             }
             
             const resetMessage = `✅ <b>KV මතකය සාර්ථකව යළි පිහිටුවන ලදී!</b>\nසියලුම පුවත් සහ දෝෂ සටහන් ඉවත් කර ඇත.`;
