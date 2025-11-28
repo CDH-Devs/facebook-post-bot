@@ -370,8 +370,8 @@ async function checkAndResolvePendingPost(env) {
     
     // Use the latest description to update the caption, as description might also delay loading
     let cleanDescription = currentDescription.startsWith(pending.title) ? currentDescription.substring(pending.title.length).trim() : currentDescription;
-    // 🚨 CHANGE 2: AUTO POST CAPTION UPDATED FOR CDH NEWS HASHTAG
-    pending.caption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${pending.title}\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews`;
+    // 🚨 NEW CHANGE: REMOVED "බ්‍රේකින් නිවුස්" AND BOLDED THE ENTIRE CAPTION
+    pending.caption = `<b>${pending.title}\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews</b>`;
 
 
     if (reScrapedImage) {
@@ -459,8 +459,8 @@ async function checkForNewAdaDeranaNews(env) {
             initialImgUrl: news.imgUrl, // The thumbnail/initial URL
             retries: 0,
             timestamp: moment().tz(COLOMBO_TIMEZONE).toISOString(),
-            // 🚨 CHANGE 2: AUTO POST CAPTION UPDATED FOR CDH NEWS HASHTAG
-            caption: `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${news.title}\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews`
+            // 🚨 NEW CHANGE: REMOVED "බ්‍රේකින් නිවුස්" AND BOLDED THE ENTIRE CAPTION
+            caption: `<b>${news.title}\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews</b>`
         };
         
         // Save to PENDING KV and notify owner, then STOP
@@ -510,7 +510,7 @@ async function generateBotStatusMessage(env) {
         statusMessage += `   - Retries: ${pending.retries}/${MAX_RETRIES}\n\n`;
     } else {
         statusMessage += `✅ <b>PENDING POST:</b> None\n`;
-        statusMessage += `📰 <b>Last Posted Title:</b> ${lastCheckedTitle ? `<code>${lastCheckedTitle}</code>` : 'None'}\n\n`;
+        statusMessage += `📰 <b>Last Posted Title:</b> ${lastCheckedTitle ? `<code>${lastCheckedHeadline}</code>` : 'None'}\n\n`;
     }
 
 
