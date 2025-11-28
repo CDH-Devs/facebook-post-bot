@@ -245,7 +245,7 @@ async function checkAndResolvePendingPost(env) {
     
     // Use the latest description to update the caption, as description might also delay loading
     let cleanDescription = currentDescription.startsWith(pending.title) ? currentDescription.substring(pending.title.length).trim() : currentDescription;
-    pending.caption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${pending.title}\n\n${cleanDescription}\n\n#SriLanka #AdaDerana #BreakingNews`;
+    pending.caption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${pending.title}\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews`;
 
 
     if (reScrapedImage) {
@@ -335,7 +335,7 @@ async function checkForNewAdaDeranaNews(env) {
             retries: 0,
             timestamp: moment().tz(COLOMBO_TIMEZONE).toISOString(),
             // Store the whole Facebook caption for later use (based on initial description)
-            caption: `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${news.title}\n\n${cleanDescription}\n\n#SriLanka #AdaDerana #BreakingNews`
+            caption: `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${news.title}\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews`
         };
         
         // 🚨 Save to PENDING KV and notify owner, then STOP
