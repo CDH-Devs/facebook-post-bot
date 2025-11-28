@@ -11,12 +11,13 @@ const HARDCODED_CONFIG = {
     TELEGRAM_TOKEN: '8382727460:AAElnR4jEI91tavhJL6uCWiopUKsuZXhlcw',       
     CHAT_ID_SINHALA: '-1003111341307',             
     BOT_OWNER_ID: 1901997764, // Bot Owner ID (Verification Messages සඳහා)
-    WORKER_BASE_URL: 'https://fbpostbot.deshanchamod174.workers.dev/trigger', // 🚨 මෙය වෙනස් කරන්න
+    // 🛑 /trigger ඉවත් කර ඇත!
+    WORKER_BASE_URL: 'https://fbpostbot.deshanchamod174.workers.dev', 
 };
 
 // --- Constants ---
 const COLOMBO_TIMEZONE = 'Asia/Colombo';
-const MAX_RETRIES = 5; // උපරිම උත්සාහයන් 5 (Cron run එකක් මිනිත්තුවක් නම්, විනාඩි 5ක ප්‍රමාදයකි)
+const MAX_RETRIES = 5; 
 const HEADERS = {  
     'User-Agent': 'Mozilla/50 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
     'Accept-Language': 'en-US,en;q=0.9',
@@ -30,19 +31,65 @@ const FALLBACK_DESCRIPTION = "⚠️ සම්පූර්ණ ලිපිය �
 const LAST_ERROR_KEY = 'last_critical_error'; 
 const LAST_ERROR_TIMESTAMP = 'last_error_time'; 
 const LAST_ADADERANA_TITLE_KEY = 'last_adaderana_title'; 
-const PENDING_ADADERANA_POST = 'pending_adaderana_post'; // 🚨 නව KV Key
+const PENDING_ADADERANA_POST = 'pending_adaderana_post'; 
+const USER_LANG_PREFIX = 'user_lang_'; // Telegram Command Handler සඳහා තබා ඇත.
+
+// --- START MESSAGE CONSTANTS (Telegram handler සඳහා) ---
+const RAW_START_CAPTION_SI = `👋 <b>ආයුබෝවන්!</b>\n\n` +
+                             `💁‍♂️ මේ BOT මගින් <b>Ada Derana</b> හි නවතම පුවත් Facebook වෙත ස්වයංක්‍රීයව පළ කෙරේ.\n\n` +
+                             `🎯 මේ BOT පැය 24ම Active එකේ තියෙනවා.🔔.. ✍️\n\n` +
+                             `◇───────────────◇\n\n` +
+                             `🚀 Developer : @chamoddeshan\n` +
+                             `🔥 Mr Chamo Corporation ©\n\n` +
+                             `◇───────────────◇`;
+
 
 // =================================================================
 // --- UTILITY FUNCTIONS (KV, Telegram, Facebook) ---
 // =================================================================
 
-// [postNewsWithImageToFacebook, sendRawTelegramMessage, readKV, writeKV, editTelegramMessage]
-// (මෙම Utility functions පෙර පරිදිම පවතී.)
+/**
+ * Reads data from the KV Namespace.
+ */
+async function readKV(env, key) {
+    try {
+        if (!env.NEWS_STATE) {
+            console.error("KV Binding 'NEWS_STATE' is missing in ENV.");
+            return null;
+        }
+        // KV Read එකේදී JSON parse කිරීමට උත්සාහ කරයි (පෙර තිබූ)
+        const value = await env.NEWS_STATE.get(key);  
+        if (value === null || value === undefined) {
+            return null;
+        }
+        return value;
+    } catch (e) {
+        console.error(`KV Read Error (${key}):`, e);
+        return null;
+    }
+}
 
+/**
+ * Writes data to the KV Namespace.
+ */
+async function writeKV(env, key, value) {
+    try {
+        if (!env.NEWS_STATE) {
+            console.error("KV Binding 'NEWS_STATE' is missing in ENV. Write failed.");
+            return;
+        }
+        await env.NEWS_STATE.put(key, String(value));  
+    } catch (e) {
+        console.error(`KV Write Error (${key}):`, e);
+    }
+}
+
+/**
+ * Posts an image and caption to the Facebook Page using the Graph API.
+ */
 async function postNewsWithImageToFacebook(caption, imageUrl, env) {
     const endpoint = `https://graph.facebook.com/v19.0/${env.FACEBOOK_PAGE_ID}/photos`;
     
-    // Facebook API එකට රූපයක් නැතිනම් පමනක් text post එකක් යැවීමට අවසර දෙන්න.
     let isTextOnly = (!imageUrl || !imageUrl.startsWith('http'));
     
     if (!env.FACEBOOK_ACCESS_TOKEN || !env.FACEBOOK_PAGE_ID) {
@@ -54,12 +101,9 @@ async function postNewsWithImageToFacebook(caption, imageUrl, env) {
         access_token: env.FACEBOOK_ACCESS_TOKEN,
     };
     
-    // Image URL එකක් තිබේ නම්, එය body එකට එකතු කරයි.
     if (!isTextOnly) {
         bodyParams.url = imageUrl;
-    } else {
-        // Text Only Post: publish_to_groups = true;
-    }
+    } 
 
     const response = await fetch(endpoint, {
         method: 'POST',
@@ -77,6 +121,9 @@ async function postNewsWithImageToFacebook(caption, imageUrl, env) {
 }
 
 
+/**
+ * Sends a message to Telegram.
+ */
 async function sendRawTelegramMessage(chatId, message, imgUrl = null, replyMarkup = null, replyToId = null) {
     const TELEGRAM_TOKEN = HARDCODED_CONFIG.TELEGRAM_TOKEN;
     if (!TELEGRAM_TOKEN) {
@@ -100,7 +147,14 @@ async function sendRawTelegramMessage(chatId, message, imgUrl = null, replyMarku
             apiMethod = 'sendMessage';  
         }
         
-        // ... (replyMarkup and replyToId logic) ...
+        if (replyMarkup) {
+            payload.reply_markup = JSON.stringify(replyMarkup);
+        }
+
+        if (replyToId) {
+            payload.reply_to_message_id = replyToId;
+            payload.allow_sending_without_reply = true;
+        }
 
         const apiURL = `${TELEGRAM_API_URL}/${apiMethod}`;
         
@@ -110,6 +164,12 @@ async function sendRawTelegramMessage(chatId, message, imgUrl = null, replyMarku
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
+
+            if (response.status === 429) {
+                const delay = Math.pow(2, attempt) * 1000;
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue; 
+            }
 
             if (!response.ok) {
                 const errorText = await response.text();
@@ -133,8 +193,43 @@ async function sendRawTelegramMessage(chatId, message, imgUrl = null, replyMarku
     return false;  
 }
 
+/**
+ * Edits the text (caption) and keyboard of an existing message.
+ */
+async function editTelegramMessage(chatId, messageId, newText, replyMarkup = null) {
+    const TELEGRAM_TOKEN = HARDCODED_CONFIG.TELEGRAM_TOKEN;
+    const TELEGRAM_API_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+    const url = `${TELEGRAM_API_URL}/editMessageText`;
 
-// (readKV, writeKV, editTelegramMessage functions remain the same)
+    const payload = { 
+        chat_id: chatId, 
+        message_id: messageId, 
+        text: newText, 
+        parse_mode: 'HTML' 
+    };
+
+    if (replyMarkup) {
+        payload.reply_markup = JSON.stringify(replyMarkup);
+    }
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`Telegram Edit Message Error: ${response.status} - ${errorText}`);
+            return false;
+        }
+        return true;
+    } catch (error) {
+        console.error("Error editing message:", error);
+        return false;
+    }
+}
 
 
 // =================================================================
@@ -210,7 +305,7 @@ async function reScrapeDetails(link) {
                  potentialImageUrl = `https://sinhala.adaderana.lk${cleanedImageUrl}`;
             }
 
-            // Image URL validation: Must be a full URL and not an incomplete path
+            // Image URL validation: Must be a full URL and end with a common image extension
             if (potentialImageUrl && potentialImageUrl.length > 50 && (potentialImageUrl.endsWith('.jpg') || potentialImageUrl.endsWith('.jpeg') || potentialImageUrl.endsWith('.png'))) {
                  betterImageUrl = potentialImageUrl;
             }
@@ -225,11 +320,11 @@ async function reScrapeDetails(link) {
 
 
 // =================================================================
-// --- ADADERANA CORE SCHEDULING LOGIC (New Polling System) ---
+// --- ADADERANA CORE SCHEDULING LOGIC (Polling System) ---
 // =================================================================
 
 /**
- * 🚨 NEW: Checks the pending post queue, tries to resolve the image, and posts to Facebook.
+ * Checks the pending post queue, tries to resolve the image, and posts to Facebook.
  */
 async function checkAndResolvePendingPost(env) {
     const BOT_OWNER_ID = HARDCODED_CONFIG.BOT_OWNER_ID; 
@@ -245,7 +340,8 @@ async function checkAndResolvePendingPost(env) {
     
     // Use the latest description to update the caption, as description might also delay loading
     let cleanDescription = currentDescription.startsWith(pending.title) ? currentDescription.substring(pending.title.length).trim() : currentDescription;
-    pending.caption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${pending.title}\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews`;
+    // Update the pending object's caption with the latest description
+    pending.caption = `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${pending.title}\n\n${cleanDescription}\n\n#SriLanka #AdaDerana #BreakingNews`;
 
 
     if (reScrapedImage) {
@@ -261,22 +357,20 @@ async function checkAndResolvePendingPost(env) {
     } else if (pending.retries >= MAX_RETRIES) {
         // --- FALLBACK (Maximum retries reached) ---
         
-        // Final image to use: Initial Thumbnail, which should be relatively safe.
         let finalImage = pending.initialImgUrl; 
         let finalCaption = pending.caption;
 
         let fallbackMessage = `⚠️ <b>FALLBACK POST (Max Retries Reached - ${MAX_RETRIES})</b>:\n\nImage for "${pending.title}" failed to resolve.\nPosting with initial thumbnail or text only.`;
         
-        // Attempt to post with the fallback image.
         try {
+            // Attempt to post with the fallback image.
             await postNewsWithImageToFacebook(finalCaption, finalImage, env);
             fallbackMessage += "\n\n✅ Posted successfully using fallback thumbnail.";
         } catch (e) {
-            // If even the fallback fails (e.g., token expired, API error), try text-only
+            // If even the fallback fails, try text-only
             console.error("Fallback image post failed:", e.message);
-            // Re-attempt postNewsWithImageToFacebook but pass null for URL to force text-only mode
             await postNewsWithImageToFacebook(finalCaption, null, env); 
-            fallbackMessage = `❌ <b>CRITICAL FALLBACK ERROR:</b> Failed to post image. Posted text only.\nError: ${e.message}`;
+            fallbackMessage = `❌ <b>CRITICAL FALLBACK ERROR:</b> Failed to post image. Posted text only.\nError: <code>${e.message}</code>`;
         }
         
         await sendRawTelegramMessage(BOT_OWNER_ID, fallbackMessage, null, null);
@@ -295,7 +389,7 @@ async function checkAndResolvePendingPost(env) {
 
 
 /**
- * 🚨 NEW: Checks Ada Derana homepage for a new title. If found, saves it to PENDING.
+ * Checks Ada Derana homepage for a new title. If found, saves it to PENDING.
  */
 async function checkForNewAdaDeranaNews(env) {
     const BOT_OWNER_ID = HARDCODED_CONFIG.BOT_OWNER_ID; 
@@ -315,7 +409,7 @@ async function checkForNewAdaDeranaNews(env) {
             return; 
         }
         
-        // 🚨 New: If there is already a pending post, ignore the new one for now to prevent queueing.
+        // If there is already a pending post, ignore the new one for now.
         const pendingRaw = await readKV(env, PENDING_ADADERANA_POST);
         if (pendingRaw) {
              console.log("New news found, but there is already a pending post. Skipping.");
@@ -334,11 +428,10 @@ async function checkForNewAdaDeranaNews(env) {
             initialImgUrl: news.imgUrl, // The thumbnail/initial URL
             retries: 0,
             timestamp: moment().tz(COLOMBO_TIMEZONE).toISOString(),
-            // Store the whole Facebook caption for later use (based on initial description)
-            caption: `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${news.title}\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews`
+            caption: `🚨 බ්‍රේකින් නිවුස් 🚨\n\n${news.title}\n\n${cleanDescription}\n\n#SriLanka #AdaDerana #BreakingNews`
         };
         
-        // 🚨 Save to PENDING KV and notify owner, then STOP
+        // Save to PENDING KV and notify owner, then STOP
         await writeKV(env, PENDING_ADADERANA_POST, JSON.stringify(pendingPost));
         
         const telegramMessage = `✅ <b>Ada Derana New Post Found! (Image Pending)</b>\n\n` +
@@ -356,8 +449,161 @@ async function checkForNewAdaDeranaNews(env) {
         await writeKV(env, LAST_ERROR_KEY, errorMessage);
         await writeKV(env, LAST_ERROR_TIMESTAMP, errorTime);
         
-        // Error notification
          await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, `❌ <b>CRITICAL ERROR!</b> Ada Derana Check Failed.\n\nTime: ${errorTime}\n\nError: <code>${error.message}</code>`, null);
+    }
+}
+
+
+// =================================================================
+// --- TELEGRAM WEBHOOK HANDLER (Simplified) ---
+// =================================================================
+
+/**
+ * Generates the Admin status message. (Includes Pending Post info)
+ */
+async function generateBotStatusMessage(env) {
+    const lastError = await readKV(env, LAST_ERROR_KEY);
+    const errorTime = await readKV(env, LAST_ERROR_TIMESTAMP);
+    const lastCheckedTitle = await readKV(env, LAST_ADADERANA_TITLE_KEY);
+    const pendingRaw = await readKV(env, PENDING_ADADERANA_POST);
+    const pending = pendingRaw ? JSON.parse(pendingRaw) : null;
+
+
+    let statusMessage = `🤖 <b>BOT SYSTEM STATUS (ADMIN VIEW)</b> 🤖\n\n`;
+    statusMessage += `✅ <b>KV Binding:</b> ${env.NEWS_STATE ? 'OK (Active)' : '❌ FAIL (Missing)'}\n`;
+    
+    if (pending) {
+        statusMessage += `⏳ <b>PENDING POST:</b> ${pending.title}\n`;
+        statusMessage += `   - Link: <a href="${pending.link}">View</a>\n`;
+        statusMessage += `   - Retries: ${pending.retries}/${MAX_RETRIES}\n\n`;
+    } else {
+        statusMessage += `✅ <b>PENDING POST:</b> None\n`;
+        statusMessage += `📰 <b>Last Posted Title:</b> ${lastCheckedTitle ? `<code>${lastCheckedTitle}</code>` : 'None'}\n\n`;
+    }
+
+
+    if (lastError) {
+        statusMessage += `🚨 <b>Last CRITICAL Error</b> (at ${errorTime}):\n` +
+                         `<code>${lastError.substring(0, 500)}...</code>\n\n`; 
+    } else {
+        statusMessage += `✅ <b>Last Error Check:</b> No critical errors recorded.\n\n`;
+    }
+
+    statusMessage += `🔥 <b>Tip:</b> Use 'KV RESET' if the bot is stuck.`;
+    return statusMessage;
+}
+
+/**
+ * Executes the final /start message.
+ */
+async function sendFinalStartMessage(chatId, userId, isOwner, messageId, env) {
+    const BOT_OWNER_ID = HARDCODED_CONFIG.BOT_OWNER_ID; 
+    const isEditing = messageId != null;
+
+    const finalCaption = RAW_START_CAPTION_SI;
+
+    let keyboard = [];
+
+    if (isOwner) {
+        const TRIGGER_URL = HARDCODED_CONFIG.WORKER_BASE_URL + '/trigger';
+        
+        keyboard.push(
+            [{ text: '⚡️ Manual Ada Derana Trigger', url: TRIGGER_URL }] 
+        );
+        
+         keyboard.push(
+            [
+                { text: '🤖 BOT STATUS', callback_data: '/botstatus_admin' }, 
+                { text: '♻️ KV RESET', callback_data: '/resetkv_admin' }     
+            ]
+         );
+    }
+    
+    const replyMarkup = { inline_keyboard: keyboard };
+    
+    if (isEditing) {
+         await editTelegramMessage(chatId, messageId, finalCaption, replyMarkup);
+    } else {
+        await sendRawTelegramMessage(chatId, finalCaption, null, replyMarkup, null);
+    }
+}
+
+/**
+ * Handles incoming Telegram updates (messages and callback queries).
+ */
+async function handleTelegramUpdate(update, env) {
+    const BOT_OWNER_ID = HARDCODED_CONFIG.BOT_OWNER_ID; 
+
+    if (!update.message && !update.callback_query) {
+        return; 
+    }
+    
+    let userId;
+    let chatId;
+    let messageId;
+    let text = '';
+    
+    if (update.message) {
+        userId = update.message.from.id;
+        chatId = update.message.chat.id; 
+        messageId = update.message.message_id; 
+        text = update.message.text ? update.message.text.trim() : '';
+    } else if (update.callback_query) {
+        userId = update.callback_query.from.id;
+        chatId = update.callback_query.message.chat.id;
+        messageId = update.callback_query.message.message_id;
+        text = update.callback_query.data;
+        
+        await fetch(`https://api.telegram.org/bot${HARDCODED_CONFIG.TELEGRAM_TOKEN}/answerCallbackQuery?callback_query_id=${update.callback_query.id}`);
+    }
+
+    const command = text.split(' ')[0].toLowerCase();
+    
+    const isOwner = (userId === BOT_OWNER_ID);
+
+    // --- COMMAND EXECUTION ---
+    switch (command) {
+        case '/start':
+        case '/back_admin':
+            await sendFinalStartMessage(chatId, userId, isOwner, update.callback_query ? messageId : null, env);
+            break;
+
+        case '/botstatus_admin': 
+             if (!isOwner) return; 
+            
+            const statusMessage = await generateBotStatusMessage(env);
+            const backKeyboardStatus = { inline_keyboard: [
+                [{ text: '⬅️ Back to Admin Menu', callback_data: '/start' }]
+            ]};
+            
+            await editTelegramMessage(chatId, messageId, statusMessage, backKeyboardStatus);
+            break;
+            
+        case '/resetkv_admin':
+             if (!isOwner) return; 
+             
+            if (env.NEWS_STATE) {
+                await env.NEWS_STATE.delete(LAST_ADADERANA_TITLE_KEY);
+                await env.NEWS_STATE.delete(LAST_ERROR_KEY);
+                await env.NEWS_STATE.delete(LAST_ERROR_TIMESTAMP);
+                await env.NEWS_STATE.delete(PENDING_ADADERANA_POST); // Pending post එකද ඉවත් කරයි
+            }
+            
+            const resetMessage = `✅ <b>KV මතකය සාර්ථකව යළි පිහිටුවන ලදී!</b>\nසියලුම පුවත් සහ දෝෂ සටහන් ඉවත් කර ඇත.`;
+                
+            const backKeyboardReset = { inline_keyboard: [
+                [{ text: '⬅️ Back to Admin Menu', callback_data: '/start' }]
+            ]};
+            
+            await editTelegramMessage(chatId, messageId, resetMessage, backKeyboardReset);
+            break;
+
+        default:
+            if (update.message) {
+                 const defaultReplyText = `පවතින විධානයන් බැලීමට /start යොදන්න.`;
+                 await sendRawTelegramMessage(chatId, defaultReplyText, null, null, messageId); 
+            }
+            break;
     }
 }
 
@@ -373,8 +619,6 @@ async function handleScheduledTasks(env) {
     await checkForNewAdaDeranaNews(env); 
 }
 
-// ... (handleTelegramUpdate, generateBotStatusMessage, sendFinalStartMessage remain the same) ...
-
 export default {
     async scheduled(event, env, ctx) {
         ctx.waitUntil(
@@ -382,7 +626,11 @@ export default {
                 try {
                     await handleScheduledTasks(env);
                 } catch (error) {
-                    // ... (Cron error handling) ...
+                    const errorTime = moment().tz(COLOMBO_TIMEZONE).format('YYYY-MM-DD hh:mm A');
+                    const errorMessage = `[${errorTime}] WORKER CRON FAILED: ${error.stack}`;
+                    await writeKV(env, LAST_ERROR_KEY, errorMessage);
+                    await writeKV(env, LAST_ERROR_TIMESTAMP, errorTime);
+                    await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, `❌ <b>CRITICAL CRON ERROR!</b>\n\nTime: ${errorTime}\n\nError: <code>${error.message}</code>`, null);
                 }
             })()
         );
@@ -397,7 +645,11 @@ export default {
                 return new Response("Ada Derana Facebook Bot manually triggered. Check Worker Logs and Telegram Owner Chat for status.", { status: 200 });
             }
             
-            // ... (Telegram Webhook handling) ...
+            if (request.method === 'POST') {
+                const update = await request.json();
+                await handleTelegramUpdate(update, env); 
+                return new Response('OK', { status: 200 });
+            }
 
             return new Response('Ada Derana Facebook Bot is ready.', { status: 200 });
             
