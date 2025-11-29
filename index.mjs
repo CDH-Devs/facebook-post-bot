@@ -126,7 +126,6 @@ Everything else MUST stay identical and unchanged every time.
 
 /**
  * Conceptual function to call the Gemini API for various tasks.
- * FIX: This function now takes the full body payload to correctly handle different API structures.
  */
 async function callGeminiAPI(env, model, bodyPayload) { 
     if (!env.GEMINI_API_KEY) {
@@ -156,7 +155,7 @@ async function callGeminiAPI(env, model, bodyPayload) {
 
 /**
  * Translates Sinhala text to English using Gemini.
- * FIX: The body payload is correctly constructed using 'generationConfig' instead of 'config'.
+ * FIX: Added robust checks for the result structure to prevent "reading '0' of undefined" errors.
  */
 async function translateText(env, sinhalaText) {
     const model = 'gemini-2.5-flash';
@@ -164,7 +163,7 @@ async function translateText(env, sinhalaText) {
         contents: [
             { role: "user", parts: [{ text: `Translate the following Sinhala news headline into a concise, professional English headline (maximum 10 words, using capital letters where appropriate). Output only the English headline, nothing else. Sinhala: "${sinhalaText}"` }] }
         ],
-        generationConfig: { // This is the correct parameter name
+        generationConfig: { 
             temperature: 0.1,
             maxOutputTokens: 100,
         }
@@ -172,7 +171,22 @@ async function translateText(env, sinhalaText) {
 
     try {
         const result = await callGeminiAPI(env, model, bodyPayload);
-        const translated = result.candidates[0]?.content?.parts[0]?.text.trim();
+        
+        // --- FIX: Robust checking for result structure ---
+        if (!result.candidates || result.candidates.length === 0) {
+            console.warn("Gemini returned no candidates (Safety or quota issue?). Result:", JSON.stringify(result));
+            return null;
+        }
+
+        const firstCandidate = result.candidates[0];
+        const parts = firstCandidate.content?.parts;
+
+        if (!parts || parts.length === 0) {
+             console.warn("Gemini candidate has no parts.", JSON.stringify(firstCandidate));
+             return null;
+        }
+
+        const translated = parts[0].text?.trim();
 
         // Basic cleanup and ensuring it's uppercase for the banner
         return translated ? translated.toUpperCase().replace(/[\*\`\"]/g, '') : null;
@@ -184,9 +198,6 @@ async function translateText(env, sinhalaText) {
 
 /**
  * Generates the customized news alert image using the conceptual Imagen API.
- * NOTE: This call structure is fixed to use 'bodyPayload' correctly, but 
- * text-to-image may require a different endpoint than 'generateContent'. 
- * The main logic will fall back to a static image if this fails.
  */
 async function generateImageWithAI(env, englishHeadline, originalImageUrl) {
     const today = moment().tz(COLOMBO_TIMEZONE).format('YYYY-MM-DD');
@@ -573,6 +584,7 @@ async function checkForNewAdaDeranaNews(env) {
         let finalImageUrl = DEFAULT_FALLBACK_IMAGE_URL; 
         
         if (originalImageUrl) {
+            // Note: The generateImageWithAI is conceptual, but the rest of the flow is correct.
             const aiGeneratedUrl = await generateImageWithAI(env, englishHeadline, originalImageUrl);
             if (aiGeneratedUrl) {
                 finalImageUrl = aiGeneratedUrl;
