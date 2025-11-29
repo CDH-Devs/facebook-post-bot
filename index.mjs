@@ -27,7 +27,7 @@ const HEADERS = {
 const ADADERANA_NEWS_URL = 'https://sinhala.adaderana.lk/sinhala-hot-news.php'; 
 const FALLBACK_DESCRIPTION = "⚠️ සම්පූර්ණ ලිපිය ලබාගැනීමට නොහැකි විය. කරුණාකර වෙබ් අඩවිය පරීක්ෂා කරන්න.";
 
-// 🚨 Static Image URL for ultimate fallback
+// 🚨 Static Image URL for ultimate fallback (Template Image URL)
 const DEFAULT_FALLBACK_IMAGE_URL = 'https://i.postimg.cc/SxcRHnfX/photo-2025-11-28-22-10-46.jpg';
 
 // --- KV KEYS ---
@@ -100,7 +100,7 @@ function decorateDescriptionWithEmojis(description) {
 }
 
 // =================================================================
-// --- 🚨 GEMINI API LOGIC (Translation Only) 🚨 ---
+// --- 🚨 GEMINI API LOGIC (Translation Only - Still needed for success message) 🚨 ---
 // =================================================================
 
 /**
@@ -132,7 +132,7 @@ async function callGeminiAPI(env, model, bodyPayload) {
 }
 
 /**
- * Translates Sinhala text to English using Gemini.
+ * Translates Sinhala text to English using Gemini. (Still executes, but not used in Facebook post)
  */
 async function translateText(env, sinhalaText) {
     const model = 'gemini-2.5-flash';
@@ -174,9 +174,6 @@ async function translateText(env, sinhalaText) {
         return null; 
     }
 }
-
-// 🚨 REMOVED generateImageWithAI FUNCTION: It was only returning a broken mock URL and causing the 404/324 errors. 
-// The image logic is now contained within executePostWorkflow for robust fallback handling.
 
 // =================================================================
 // --- UTILITY FUNCTIONS (KV, Telegram, Facebook) ---
@@ -227,20 +224,23 @@ async function postNewsWithImageToFacebook(caption, imageUrl, env) {
     // Facebook requires a real URL for the /photos endpoint
     const isImagePost = (imageUrl && imageUrl.startsWith('http'));
     
-    const endpoint = `https://graph.facebook.com/v19.0/${env.FACEBOOK_PAGE_ID}/${isImagePost ? 'photos' : 'feed'}`;
+    if (!isImagePost) {
+        // This should theoretically not happen if the fallback is working, but it's a safety net
+        throw new Error("Cannot post: No valid image URL was provided.");
+    }
+    
+    const endpoint = `https://graph.facebook.com/v19.0/${env.FACEBOOK_PAGE_ID}/photos`;
     
     if (!env.FACEBOOK_ACCESS_TOKEN || !env.FACEBOOK_PAGE_ID) {
         throw new Error("Missing FACEBOOK_ACCESS_TOKEN or FACEBOOK_PAGE_ID environment variables.");
     }
     
     const bodyParams = {
-        [isImagePost ? 'caption' : 'message']: caption,
+        caption: caption,
         access_token: env.FACEBOOK_ACCESS_TOKEN,
+        url: imageUrl,
     };
     
-    if (isImagePost) {
-        bodyParams.url = imageUrl;
-    } 
 
     const response = await fetch(endpoint, {
         method: 'POST',
@@ -252,7 +252,7 @@ async function postNewsWithImageToFacebook(caption, imageUrl, env) {
 
     const result = await response.json();
     if (!response.ok) {
-        throw new Error(`Facebook API Error (${isImagePost ? 'Image' : 'Text'} Post) - Endpoint: ${isImagePost ? '/photos' : '/feed'} - Failed URL: ${imageUrl || 'N/A'} - Error: ${JSON.stringify(result.error)}`);
+        throw new Error(`Facebook API Error (Image Post) - Endpoint: /photos - Failed URL: ${imageUrl || 'N/A'} - Error: ${JSON.stringify(result.error)}`);
     }
     console.log(`Facebook Post Successful: ${result.id}`);
 }
@@ -485,47 +485,58 @@ async function reScrapeDetails(link) {
  * Executes the full workflow: Translation, Image Handling, Facebook Post, and KV update.
  */
 async function executePostWorkflow(news, originalImageUrl, initialDescription, env) {
+    
     // --- 1. Preparation of Caption ---
     let cleanDescription = initialDescription.startsWith(news.title) ? initialDescription.substring(news.title.length).trim() : initialDescription;
     cleanDescription = removeAuthorCredit(cleanDescription); 
     const decoratedDescription = decorateDescriptionWithEmojis(cleanDescription); 
     const ctaLine = toUnicodeBold("ඔබේ අදහස කුමක්ද?"); 
     
-    const rawCaption = `«${news.title}»\n\n${decoratedDescription}\n\n` + 
+    const rawCaptionBase = `${decoratedDescription}\n\n` + 
                        `👇 ${ctaLine} 👇\n\n` +  
                        `#SriLanka #CDHNews #BreakingNews`;
     
-    const finalSinhalaCaption = toUnicodeBold(rawCaption);
-
-    // --- 2. Translate Title to English (using Gemini) ---
-    // This step is kept as it is functional and provides the English headline for potential future AI use.
-    const englishHeadline = await translateText(env, news.title);
+    // --- 2. Translate Title (for Telegram notification only) ---
+    const englishHeadline = await translateText(env, news.title); // Still executes for the success message
 
     if (!englishHeadline) {
-         throw new Error(`Headline translation failed for: ${news.title}`);
+         console.warn(`Headline translation failed for: ${news.title}. Continuing without English headline.`);
     }
     
     // --- 3. Determine Final Image URL ---
     let finalImageUrl;
-    const postImageSource = originalImageUrl ? "Scraped Original" : "Static Fallback";
-    
-    // 🚨 FIX: Use the actual scraped image URL if available, or the static fallback. 
-    // This bypasses the broken AI image generation mock which caused the 404/324 errors.
+    let postImageSource;
+
     if (originalImageUrl) {
         finalImageUrl = originalImageUrl;
+        postImageSource = "Scraped Original";
     } else {
+        // Use the fallback URL as requested
         finalImageUrl = DEFAULT_FALLBACK_IMAGE_URL;
+        postImageSource = "Static Fallback (Template)";
     }
 
-    console.warn(`AI Image generation skipped due to API errors. Using image source: ${postImageSource}`);
+    if (!finalImageUrl) {
+        throw new Error(`Posting aborted for "${news.title}": No valid image URL was found.`);
+    }
+
+    // --- 4. CREATE FINAL CAPTION (English Headline is excluded) ---
     
-    // --- 4. Post to Facebook ---
-    await postNewsWithImageToFacebook(finalSinhalaCaption, finalImageUrl, env);
+    // 📰 Sinhala Headline (For content clarity)
+    const originalHeadlineLine = toUnicodeBold(`📰 ${news.title}`);
     
-    // --- 5. Update KV and Notify Owner (Only update KV if the post was successful) ---
+    // Combine everything: Sinhala Headline, and then Description/CTA
+    const finalCaptionForFacebook = `${originalHeadlineLine}\n\n` +
+                                    toUnicodeBold(rawCaptionBase);
+
+
+    // --- 5. Post to Facebook ---
+    await postNewsWithImageToFacebook(finalCaptionForFacebook, finalImageUrl, env);
+    
+    // --- 6. Update KV and Notify Owner (Only update KV if the post was successful) ---
     await writeKV(env, LAST_ADADERANA_TITLE_KEY, news.title);
     
-    const telegramMessage = `✅ <b>SUCCESS!</b> Ada Derana Post for "${news.title}" successful.\n(Headline translated: ${englishHeadline}).\n(Image used: ${postImageSource}).\n\n<b>Final Image URL:</b> <a href="${finalImageUrl}">View Image</a>\n<b>Link:</b> <a href="${news.link}">View Article</a>`;
+    const telegramMessage = `✅ <b>SUCCESS!</b> Ada Derana Post for "${news.title}" successful.\n(Headline translated: ${englishHeadline || 'Failed/Skipped'}).\n(Image source: ${postImageSource}).\n\n<b>Final Image URL:</b> <a href="${finalImageUrl}">View Image</a>\n<b>Link:</b> <a href="${news.link}">View Article</a>`;
     await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, telegramMessage, finalImageUrl, null);
 }
 
@@ -607,7 +618,7 @@ async function checkForNewAdaDeranaNews(env) {
         await writeKV(env, LAST_ERROR_TIMESTAMP, errorTime);
         
          // Send the notification message here
-         await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, `❌ <b>CRITICAL ERROR!</b> Ada Derana Check Failed (Translation/Posting Failure).\n\nTime: ${errorTime}\n\nError: <code>${error.message}</code>`, null);
+         await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, `❌ <b>CRITICAL ERROR!</b> Ada Derana Check Failed.\n\nTime: ${errorTime}\n\nError: <code>${error.message}</code>`, null);
     }
 }
 
@@ -629,7 +640,7 @@ async function generateBotStatusMessage(env) {
     statusMessage += `✅ <b>KV Binding:</b> ${env.NEWS_STATE ? 'OK (Active)' : '❌ FAIL (Missing)'}\n`;
     
     // Updated Status: AI Image is OFF, Translation is ON
-    statusMessage += `⚙️ <b>AI Mode:</b> Translation (ON), Image Generation (OFF)\n`; 
+    statusMessage += `⚙️ <b>AI Mode:</b> Translation (ON), Image Generation (OFF - Template not possible in Worker)\n`; 
     statusMessage += `📰 <b>Last Posted Title:</b> ${lastCheckedTitle ? `<code>${lastCheckedTitle}</code>` : 'None'}\n\n`;
 
 
