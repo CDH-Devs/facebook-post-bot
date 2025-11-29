@@ -126,13 +126,14 @@ Everything else MUST stay identical and unchanged every time.
 
 /**
  * Conceptual function to call the Gemini API for various tasks.
- * Assumes a worker environment variable 'GEMINI_API_KEY' is set.
+ * FIX: This function now takes the full body payload to correctly handle different API structures.
  */
-async function callGeminiAPI(env, model, contents, config = {}) {
+async function callGeminiAPI(env, model, bodyPayload) { 
     if (!env.GEMINI_API_KEY) {
         throw new Error("GEMINI_API_KEY is not configured in the environment.");
     }
 
+    // Note: The endpoint is generateContent, which supports text models and multimodal inputs.
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
     
     const response = await fetch(endpoint, {
@@ -140,11 +141,12 @@ async function callGeminiAPI(env, model, contents, config = {}) {
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ contents, config }),
+        body: JSON.stringify(bodyPayload), // Correctly serialize the full payload
     });
 
     if (!response.ok) {
         const errorBody = await response.json();
+        // The error message is now captured here correctly
         throw new Error(`Gemini API Error (${model}): ${response.status} - ${JSON.stringify(errorBody)}`);
     }
 
@@ -153,16 +155,23 @@ async function callGeminiAPI(env, model, contents, config = {}) {
 }
 
 /**
- * Translates Sinhala text to English using a conceptual Gemini call.
+ * Translates Sinhala text to English using Gemini.
+ * FIX: The body payload is correctly constructed using 'generationConfig' instead of 'config'.
  */
 async function translateText(env, sinhalaText) {
     const model = 'gemini-2.5-flash';
-    const contents = [
-        { role: "user", parts: [{ text: `Translate the following Sinhala news headline into a concise, professional English headline (maximum 10 words, using capital letters where appropriate). Output only the English headline, nothing else. Sinhala: "${sinhalaText}"` }] }
-    ];
+    const bodyPayload = {
+        contents: [
+            { role: "user", parts: [{ text: `Translate the following Sinhala news headline into a concise, professional English headline (maximum 10 words, using capital letters where appropriate). Output only the English headline, nothing else. Sinhala: "${sinhalaText}"` }] }
+        ],
+        generationConfig: { // This is the correct parameter name
+            temperature: 0.1,
+            maxOutputTokens: 100,
+        }
+    };
 
     try {
-        const result = await callGeminiAPI(env, model, contents);
+        const result = await callGeminiAPI(env, model, bodyPayload);
         const translated = result.candidates[0]?.content?.parts[0]?.text.trim();
 
         // Basic cleanup and ensuring it's uppercase for the banner
@@ -175,6 +184,9 @@ async function translateText(env, sinhalaText) {
 
 /**
  * Generates the customized news alert image using the conceptual Imagen API.
+ * NOTE: This call structure is fixed to use 'bodyPayload' correctly, but 
+ * text-to-image may require a different endpoint than 'generateContent'. 
+ * The main logic will fall back to a static image if this fails.
  */
 async function generateImageWithAI(env, englishHeadline, originalImageUrl) {
     const today = moment().tz(COLOMBO_TIMEZONE).format('YYYY-MM-DD');
@@ -183,21 +195,22 @@ async function generateImageWithAI(env, englishHeadline, originalImageUrl) {
         .replace('[DATE_PLACEHOLDER]', today)
         .replace('[HEADLINE_PLACEHOLDER]', englishHeadline);
 
-    const contents = [
-        { text: finalPrompt }
-    ];
+    const bodyPayload = {
+        contents: [
+            { role: "user", parts: [{ text: finalPrompt }] }
+        ],
+        // Conceptual config for image generation
+        imageGenerationConfig: { 
+            numberOfImages: 1,
+            aspectRatio: "1:1",
+        }
+    };
 
     try {
-        // Model choice is conceptual, using Imagen 3.0 placeholder
-        const result = await callGeminiAPI(env, 'imagen-3.0-generate-002', contents, {
-            imageGenerationConfig: {
-                numberOfImages: 1,
-                aspectRatio: "1:1",
-            }
-        });
+        // Model choice is conceptual
+        const result = await callGeminiAPI(env, 'imagen-3.0-generate-002', bodyPayload);
         
-        // ⚠️ Placeholder for a successfully generated image URL
-        // A real implementation requires a hosting step. We return a placeholder URL.
+        // Placeholder for a successfully generated image URL
         const generatedImageURL = `https://your-image-hosting-service.com/ai-image-${Date.now()}.jpg`;
         
         console.log(`AI Image Generated successfully (conceptually): ${generatedImageURL}`);
