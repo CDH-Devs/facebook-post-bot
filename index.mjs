@@ -155,7 +155,7 @@ async function callGeminiAPI(env, model, bodyPayload) {
 
 /**
  * Translates Sinhala text to English using Gemini.
- * FIX: Increased maxOutputTokens to prevent MAX_TOKENS truncation error.
+ * FIX: Increased maxOutputTokens to the maximum value (2048) to prevent MAX_TOKENS truncation error.
  */
 async function translateText(env, sinhalaText) {
     const model = 'gemini-2.5-flash';
@@ -165,7 +165,7 @@ async function translateText(env, sinhalaText) {
         ],
         generationConfig: { 
             temperature: 0.1,
-            maxOutputTokens: 500, // <--- FIX: Increased from 100 to 500
+            maxOutputTokens: 2048, // <--- FIX: Increased from 500 to 2048 (Maximum)
         }
     };
 
