@@ -68,6 +68,43 @@ function toUnicodeBold(text) {
     return result;
 }
 
+
+/**
+ * Removes common author credits like (by authorname) from the end of the text.
+ */
+function removeAuthorCredit(text) {
+    // Regex to find patterns like "(by AuthorName)", "by AuthorName", or similar at the end.
+    const rawAuthorRegex = /\s*\(?by\s+[^\(\)]+\)?\s*$/i; 
+    return text.replace(rawAuthorRegex, '').trim();
+}
+
+/**
+ * Decorates each paragraph of the description by cycling through a set of emojis.
+ */
+function decorateDescriptionWithEmojis(description) {
+    const FALLBACK_DESCRIPTION = "⚠️ සම්පූර්ණ ලිපිය ලබාගැනීමට නොහැකි විය. කරුණාකර වෙබ් අඩවිය පරීක්ෂා කරන්න.";
+    if (!description || description === FALLBACK_DESCRIPTION) {
+        return description;
+    }
+    
+    // 🚨 NEW EMOJI ARRAY for rotating decoration (පේළියෙන් පේළියට මාරුවන ඉමෝජි)
+    const emojiSet = ['👉', '✨', '📢', '📰', '🔍']; 
+    const setLength = emojiSet.length;
+
+    // Split by double newline to handle paragraphs
+    const paragraphs = description.split('\n\n').filter(p => p.trim() !== '');
+
+    // Add emoji to the start of each non-empty paragraph, cycling through the set
+    const decoratedParagraphs = paragraphs.map((p, i) => {
+        const rotatingEmoji = emojiSet[i % setLength]; // ලැයිස්තුව හරහා කරකවයි
+        return `${rotatingEmoji} ${p.trim()}`;
+    });
+
+    // Rejoin with double newline
+    return decoratedParagraphs.join('\n\n');
+}
+
+
 // =================================================================
 // --- UTILITY FUNCTIONS (KV, Telegram, Facebook) ---
 // =================================================================
@@ -391,8 +428,19 @@ async function checkAndResolvePendingPost(env) {
     // Use the latest description to update the caption, as description might also delay loading
     let cleanDescription = currentDescription.startsWith(pending.title) ? currentDescription.substring(pending.title.length).trim() : currentDescription;
     
+    // 🚨 NEW CHANGE 1: Remove author credits
+    cleanDescription = removeAuthorCredit(cleanDescription); 
+    
+    // 🚨 NEW CHANGE 2: Decorate description with line emojis
+    const decoratedDescription = decorateDescriptionWithEmojis(cleanDescription); 
+
+    // 🚨 NEW CHANGE 3: Add Bold CTA
+    const ctaLine = toUnicodeBold("ඔබේ අදහස කුමක්ද?"); // CTA එක Bold කර ඇත
+
     // Build the raw caption string - ADDING DOUBLE ANGLE QUOTES FOR VISUAL EMPHASIS ON TITLE
-    const rawCaption = `«${pending.title}»\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews`;
+    const rawCaption = `«${pending.title}»\n\n${decoratedDescription}\n\n` + 
+                       `👇 ${ctaLine} 👇\n\n` +  
+                       `#SriLanka #CDHNews #BreakingNews`;
 
     // 🚨 CHANGE: Apply Unicode Bold (will bold hashtags/Latin letters only)
     pending.caption = toUnicodeBold(rawCaption);
@@ -475,8 +523,19 @@ async function checkForNewAdaDeranaNews(env) {
         const { description: initialDescription } = await reScrapeDetails(news.link);
         let cleanDescription = initialDescription.startsWith(news.title) ? initialDescription.substring(news.title.length).trim() : initialDescription;
 
+        // 🚨 NEW CHANGE 1: Remove author credits
+        cleanDescription = removeAuthorCredit(cleanDescription); 
+        
+        // 🚨 NEW CHANGE 2: Decorate description with line emojis
+        const decoratedDescription = decorateDescriptionWithEmojis(cleanDescription); 
+
+        // 🚨 NEW CHANGE 3: Add Bold CTA
+        const ctaLine = toUnicodeBold("ඔබේ අදහස කුමක්ද?"); // CTA එක Bold කර ඇත
+
         // Build the raw caption string - ADDING DOUBLE ANGLE QUOTES FOR VISUAL EMPHASIS ON TITLE
-        const rawCaption = `«${news.title}»\n\n${cleanDescription}\n\n#SriLanka #CDHNews #BreakingNews`;
+        const rawCaption = `«${news.title}»\n\n${decoratedDescription}\n\n` + 
+                           `👇 ${ctaLine} 👇\n\n` +  
+                           `#SriLanka #CDHNews #BreakingNews`;
         
         // --- New PENDING Post Creation ---
         const pendingPost = {
@@ -682,8 +741,15 @@ async function handleTelegramUpdate(update, env) {
                 mediaUrl = await getTelegramFileUrl(fileId);
                 
                 if (mediaUrl) {
-                    // 🚨 CHANGE 3: MANUAL POST CAPTION UPDATED FOR CDH NEWS HASHTAG
-                    caption = `${caption}\n\n#CDHNews #ManualPost`;
+                    // Manual post cleanup and decoration
+                    let cleanCaption = removeAuthorCredit(caption);
+                    const decoratedDescription = decorateDescriptionWithEmojis(cleanCaption);
+                    const ctaLine = toUnicodeBold("ඔබේ අදහස කුමක්ද?");
+                    
+                    caption = `${decoratedDescription}\n\n` + 
+                              `👇 ${ctaLine} 👇\n\n` +  
+                              `#CDHNews #ManualPost`;
+                              
                 } else {
                     // Failed to get URL, post as text only
                     caption = `📣 **Manual Post (File Fetch Failed!)**\n\n${caption}\n\n#CDHNews`;
@@ -694,7 +760,7 @@ async function handleTelegramUpdate(update, env) {
                 await sendRawTelegramMessage(chatId, "⚠️ **Manual Post Failed:** Cannot post an empty message without media.", null, null, messageId);
                 return new Response('OK', { status: 200 }); // Stop processing
             }
-
+            
             // Post to Facebook
             // Convert to Unicode bold before posting manually
             const finalCaption = toUnicodeBold(caption);
