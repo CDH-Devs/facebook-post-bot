@@ -34,11 +34,8 @@ const DEFAULT_FALLBACK_IMAGE_URL = 'https://i.postimg.cc/SxcRHnfX/photo-2025-11-
 const LAST_ERROR_KEY = 'last_critical_error'; 
 const LAST_ERROR_TIMESTAMP = 'last_error_time'; 
 const LAST_ADADERANA_TITLE_KEY = 'last_adaderana_title'; 
-const PENDING_ADADERANA_POST = 'pending_adaderana_post'; 
-const USER_LANG_PREFIX = 'user_lang_'; 
 
 // --- START MESSAGE CONSTANTS (Telegram handler සඳහා) ---
-// 🚨 CHANGE 1: START CAPTION UPDATED FOR CDH NEWS
 const RAW_START_CAPTION_SI = `👋 <b>ආයුබෝවන්!</b>\n\n` +
                              `💁‍♂️ මේ BOT මගින් ඔබගේ <b>CDH News</b> Facebook පිටුව වෙත <b>Ada Derana</b> හි නවතම පුවත් ස්වයංක්‍රීයව පළ කෙරේ.\n\n` +
                              `🎯 මේ BOT පැය 24ම Active එකේ තියෙනවා.🔔.. ✍️\n\n` +
@@ -57,12 +54,10 @@ const BOLD_MAP = {
 
 /**
  * Converts standard Latin letters and digits to Unicode Bold characters.
- * Sinhala characters will remain unchanged.
  */
 function toUnicodeBold(text) {
     let result = '';
     for (const char of text) {
-        // Only attempt to replace if the character is in the BOLD_MAP
         result += BOLD_MAP[char] || char;
     }
     return result;
@@ -73,7 +68,6 @@ function toUnicodeBold(text) {
  * Removes common author credits like (by authorname) from the end of the text.
  */
 function removeAuthorCredit(text) {
-    // Regex to find patterns like "(by AuthorName)", "by AuthorName", or similar at the end.
     const rawAuthorRegex = /\s*\(?by\s+[^\(\)]+\)?\s*$/i; 
     return text.replace(rawAuthorRegex, '').trim();
 }
@@ -82,26 +76,180 @@ function removeAuthorCredit(text) {
  * Decorates each paragraph of the description by cycling through a set of emojis.
  */
 function decorateDescriptionWithEmojis(description) {
-    const FALLBACK_DESCRIPTION = "⚠️ සම්පූර්ණ ලිපිය ලබාගැනීමට නොහැකි විය. කරුණාකර වෙබ් අඩවිය පරීක්ෂා කරන්න.";
     if (!description || description === FALLBACK_DESCRIPTION) {
         return description;
     }
     
-    // 🚨 NEW EMOJI ARRAY for rotating decoration (පේළියෙන් පේළියට මාරුවන ඉමෝජි)
     const emojiSet = ['👉', '✨', '📢', '📰', '🔍']; 
     const setLength = emojiSet.length;
 
-    // Split by double newline to handle paragraphs
     const paragraphs = description.split('\n\n').filter(p => p.trim() !== '');
 
-    // Add emoji to the start of each non-empty paragraph, cycling through the set
     const decoratedParagraphs = paragraphs.map((p, i) => {
-        const rotatingEmoji = emojiSet[i % setLength]; // ලැයිස්තුව හරහා කරකවයි
+        const rotatingEmoji = emojiSet[i % setLength]; 
         return `${rotatingEmoji} ${p.trim()}`;
     });
 
-    // Rejoin with double newline
     return decoratedParagraphs.join('\n\n');
+}
+
+// =================================================================
+// --- 🚨 NEW OPENAI API IMAGE GENERATION PROMPT & LOGIC 🚨 ---
+// =================================================================
+
+const AI_IMAGE_PROMPT_TEMPLATE = `
+Create a professional Sri Lankan red news alert template in the exact same design and layout every time.
+Do NOT change the style, colors, fonts, borders, perspective, alignment, spacing or composition under any condition.
+The output MUST always keep the identical template.
+
+Permanent fixed layout instructions (never change):
+• Full red news studio background with globe + diagonal lines.
+• Top header: “CDH NEWS ALERT” in white and gold.
+• Top-left white date box: [DATE_PLACEHOLDER]
+• Center: place the uploaded image with a thin white border and a soft shadow. (The image should be placed perfectly in the center box).
+• Below the image: a wide red banner with the headline text in bold white capital letters: [HEADLINE_PLACEHOLDER]
+• Bottom left text: www.cdhnews.lk
+• Bottom center yellow strip: CDH NEWS
+• Output size MUST be square HD 1024x1024.
+• Always keep the same background, spacing, alignment and design style.
+
+Text rules: 
+• English text MUST be bold sans-serif block font, sharp and readable. 
+• Do NOT warp, curve or distort the text.
+
+Replace only: 
+• Date = [DATE_PLACEHOLDER]
+• Headline = [HEADLINE_PLACEHOLDER]
+
+Everything else MUST stay identical and unchanged every time.
+`;
+
+/**
+ * Calls the OpenAI Chat API (gpt-3.5-turbo).
+ */
+async function callOpenAI_Chat(env, messages, model = 'gpt-3.5-turbo') {
+    if (!env.OPENAI_API_KEY) {
+        throw new Error("OPENAI_API_KEY is not configured in the environment.");
+    }
+
+    const endpoint = `https://api.openai.com/v1/chat/completions`;
+    
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${env.OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+            model: model,
+            messages: messages,
+            temperature: 0.1,
+            max_tokens: 100,
+        }),
+    });
+
+    if (!response.ok) {
+        const errorBody = await response.json();
+        throw new Error(`OpenAI Chat API Error (${model}): ${response.status} - ${JSON.stringify(errorBody)}`);
+    }
+
+    const json = await response.json();
+    return json;
+}
+
+/**
+ * Calls the OpenAI Image Generation API (DALL-E 3).
+ */
+async function callOpenAI_Image(env, prompt) {
+    if (!env.OPENAI_API_KEY) {
+        throw new Error("OPENAI_API_KEY is not configured in the environment.");
+    }
+
+    const endpoint = `https://api.openai.com/v1/images/generations`;
+
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${env.OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+            model: "dall-e-3", // Use DALL-E 3 for best quality template following
+            prompt: prompt,
+            n: 1,
+            size: "1024x1024", // Square output
+            response_format: "url" // Request a temporary public URL
+        }),
+    });
+
+    if (!response.ok) {
+        const errorBody = await response.json();
+        throw new Error(`OpenAI Image API Error (DALL-E 3): ${response.status} - ${JSON.stringify(errorBody)}`);
+    }
+
+    const json = await response.json();
+    
+    // DALL-E returns a temporary URL
+    const imageUrl = json.data[0].url;
+    return imageUrl;
+}
+
+
+/**
+ * Translates Sinhala text to English using ChatGPT.
+ */
+async function translateText(env, sinhalaText) {
+    const messages = [
+        { role: "system", content: "You are a professional news translator. Translate Sinhala headlines to concise, professional English headlines (maximum 10 words, using capital letters where appropriate). Output only the English headline, nothing else." },
+        { role: "user", content: `Sinhala Headline: "${sinhalaText}"` }
+    ];
+
+    try {
+        const result = await callOpenAI_Chat(env, messages);
+        const translated = result.choices[0]?.message?.content.trim();
+
+        // Basic cleanup and ensuring it's uppercase for the banner
+        return translated ? translated.toUpperCase().replace(/[\*\`\"]/g, '') : null;
+    } catch (e) {
+        console.error("Translation failed:", e.message);
+        return null; 
+    }
+}
+
+/**
+ * Generates the customized news alert image using DALL-E 3.
+ */
+async function generateImageWithAI(env, englishHeadline, originalImageUrl) {
+    const today = moment().tz(COLOMBO_TIMEZONE).format('YYYY-MM-DD');
+
+    // 1. First, create a secondary prompt to ask DALL-E to generate a relevant image
+    // based on the original image and the English headline, which will be placed in the center box.
+    const imageContentPrompt = `Analyze the following news headline: "${englishHeadline}". Based *only* on the headline, generate a visually striking, high-quality, relevant image that summarizes the news event. This image should have a thin white border and a soft shadow, and must be created *inside* the center box of the overall news alert template. The image generated should fill the entire center box perfectly and be a photograph, not a drawing or graphic.`;
+    
+    // 2. Insert the generated content prompt into the main template
+    // NOTE: DALL-E 3 does not natively support an "uploaded image" parameter for inpainting/template filling. 
+    // We modify the prompt to describe the required image based on the headline, following the user's template.
+
+    let finalPrompt = AI_IMAGE_PROMPT_TEMPLATE
+        .replace('[DATE_PLACEHOLDER]', today)
+        .replace('[HEADLINE_PLACEHOLDER]', englishHeadline);
+
+    // Replace the generic "Center: place the uploaded image..." instruction with the specific generated image prompt
+    finalPrompt = finalPrompt.replace(
+        '• Center: place the uploaded image with a thin white border and a soft shadow. (The image should be placed perfectly in the center box).',
+        `• Center: The main image, which should be a professional, high-resolution photograph relevant to the headline, and it MUST be framed with a thin white border and a soft shadow, filling the center box perfectly. The image content should summarize: "${imageContentPrompt}"`
+    );
+
+    try {
+        const imageUrl = await callOpenAI_Image(env, finalPrompt);
+        
+        console.log(`DALL-E Image Generated successfully: ${imageUrl}`);
+        return imageUrl;
+
+    } catch (e) {
+        console.error("AI Image Generation failed:", e.message);
+        return null; 
+    }
 }
 
 
@@ -184,9 +332,7 @@ async function postNewsWithImageToFacebook(caption, imageUrl, env) {
 
 
 /**
- * Fetches the direct URL for a given Telegram file ID (for images/videos).
- * @param {string} fileId - The file_id from Telegram message object.
- * @returns {Promise<string|null>} The direct file URL or null.
+ * Fetches the direct URL for a given Telegram file ID. (Kept for manual post utility)
  */
 async function getTelegramFileUrl(fileId) {
     const TELEGRAM_TOKEN = HARDCODED_CONFIG.TELEGRAM_TOKEN;
@@ -353,8 +499,7 @@ async function getLatestAdaDeranaNewsSummary() {
 }
 
 /**
- * Re-scrapes the detail page for the high-quality image and description.
- * (Used for both initial scrape and polling)
+ * Scrapes the detail page for the high-quality image and description.
  */
 async function reScrapeDetails(link) {
     let description = FALLBACK_DESCRIPTION;
@@ -380,7 +525,7 @@ async function reScrapeDetails(link) {
              description = FALLBACK_DESCRIPTION;
         }
 
-        // --- 2. Image ---
+        // --- 2. Image (Thumbnail, used for AI generation) ---
         const mainImage = $detail('div.news-banner img').first().attr('src'); 
         if (mainImage) {
             let cleanedImageUrl = mainImage.trim();
@@ -392,7 +537,7 @@ async function reScrapeDetails(link) {
                  potentialImageUrl = `https://sinhala.adaderana.lk${cleanedImageUrl}`;
             }
 
-            // Image URL validation: Must be a full URL and end with a common image extension
+            // Image URL validation
             if (potentialImageUrl && potentialImageUrl.length > 50 && (potentialImageUrl.endsWith('.jpg') || potentialImageUrl.endsWith('.jpeg') || potentialImageUrl.endsWith('.png'))) {
                  betterImageUrl = potentialImageUrl;
             }
@@ -402,97 +547,17 @@ async function reScrapeDetails(link) {
         console.error(`Error fetching/scraping detail page ${link}: ${e.message}`);
     }
     
-    return { description, imgUrl: betterImageUrl }; // betterImageUrl will be null if invalid
+    return { description, imgUrl: betterImageUrl }; 
 }
 
 
 // =================================================================
-// --- ADADERANA CORE SCHEDULING LOGIC (Polling System) ---
+// --- MODIFIED CORE SCHEDULING LOGIC (AI Integration) ---
 // =================================================================
 
-/**
- * Checks the pending post queue, tries to resolve the image, and posts to Facebook.
- */
-async function checkAndResolvePendingPost(env) {
-    const BOT_OWNER_ID = HARDCODED_CONFIG.BOT_OWNER_ID; 
-    const pendingRaw = await readKV(env, PENDING_ADADERANA_POST);
-
-    if (!pendingRaw) return; 
-
-    let pending = JSON.parse(pendingRaw);
-    pending.retries = (pending.retries || 0) + 1;
-    
-    // Re-scrape the detail page for the latest image and description (just in case)
-    const { description: currentDescription, imgUrl: reScrapedImage } = await reScrapeDetails(pending.link);
-    
-    // Use the latest description to update the caption, as description might also delay loading
-    let cleanDescription = currentDescription.startsWith(pending.title) ? currentDescription.substring(pending.title.length).trim() : currentDescription;
-    
-    // 🚨 NEW CHANGE 1: Remove author credits
-    cleanDescription = removeAuthorCredit(cleanDescription); 
-    
-    // 🚨 NEW CHANGE 2: Decorate description with line emojis
-    const decoratedDescription = decorateDescriptionWithEmojis(cleanDescription); 
-
-    // 🚨 NEW CHANGE 3: Add Bold CTA
-    const ctaLine = toUnicodeBold("ඔබේ අදහස කුමක්ද?"); // CTA එක Bold කර ඇත
-
-    // Build the raw caption string - ADDING DOUBLE ANGLE QUOTES FOR VISUAL EMPHASIS ON TITLE
-    const rawCaption = `«${pending.title}»\n\n${decoratedDescription}\n\n` + 
-                       `👇 ${ctaLine} 👇\n\n` +  
-                       `#SriLanka #CDHNews #BreakingNews`;
-
-    // 🚨 CHANGE: Apply Unicode Bold (will bold hashtags/Latin letters only)
-    pending.caption = toUnicodeBold(rawCaption);
-
-
-    if (reScrapedImage) {
-        // --- SUCCESS POSTING (Image Found) ---
-        await postNewsWithImageToFacebook(pending.caption, reScrapedImage, env);
-        await writeKV(env, LAST_ADADERANA_TITLE_KEY, pending.title);
-        await env.NEWS_STATE.delete(PENDING_ADADERANA_POST); 
-        
-        const successMessage = `🥳 <b>SUCCESS!</b> Ada Derana Post for "${pending.title}" successful.\n(Image resolved on retry ${pending.retries}) - <a href="${pending.link}">View Article</a>`;
-        await sendRawTelegramMessage(BOT_OWNER_ID, successMessage, reScrapedImage, null);
-        return;
-
-    } else if (pending.retries >= MAX_RETRIES) {
-        // --- FALLBACK (Maximum retries reached) ---
-        
-        // 🚨 ULTIMATE FALLBACK: Use the user-defined static image URL
-        let finalImage = DEFAULT_FALLBACK_IMAGE_URL; 
-        let finalCaption = pending.caption;
-
-        let fallbackMessage = `⚠️ <b>FALLBACK POST (Max Retries Reached - ${MAX_RETRIES})</b>:\n\nImage for "${pending.title}" failed to resolve.\nPosting with static fallback image.`;
-        
-        try {
-            // Attempt to post with the static fallback image. (Uses /photos endpoint)
-            await postNewsWithImageToFacebook(finalCaption, finalImage, env);
-            fallbackMessage += "\n\n✅ Posted successfully using static fallback image.";
-        } catch (e) {
-            // If the static image post fails, force Text-Only Post by passing null. (Uses /feed endpoint)
-            console.error("Static fallback image post failed, forcing text-only post:", e.message);
-            await postNewsWithImageToFacebook(finalCaption, null, env); 
-            fallbackMessage = `❌ <b>CRITICAL FALLBACK ERROR:</b> Failed to post static image. Posted text only.\nError: <code>${e.message}</code>`;
-        }
-        
-        await sendRawTelegramMessage(BOT_OWNER_ID, fallbackMessage, null, null);
-        await writeKV(env, LAST_ADADERANA_TITLE_KEY, pending.title);
-        await env.NEWS_STATE.delete(PENDING_ADADERANA_POST); 
-        return;
-    } 
-
-    // --- CONTINUE RETRYING ---
-    await writeKV(env, PENDING_ADADERANA_POST, JSON.stringify(pending)); 
-    console.log(`Image not ready. Retrying in next run. Attempt: ${pending.retries}`);
-    
-    const retryStatusMessage = `⏳ **Image Check Status** for "${pending.title}": Attempt ${pending.retries}/${MAX_RETRIES} failed. Still holding post.`;
-    await sendRawTelegramMessage(BOT_OWNER_ID, retryStatusMessage, null, null);
-}
-
 
 /**
- * Checks Ada Derana homepage for a new title. If found, saves it to PENDING.
+ * Checks Ada Derana homepage for a new title. If found, translates, generates image, and posts immediately.
  */
 async function checkForNewAdaDeranaNews(env) {
     const BOT_OWNER_ID = HARDCODED_CONFIG.BOT_OWNER_ID; 
@@ -511,53 +576,54 @@ async function checkForNewAdaDeranaNews(env) {
             console.info(`Ada Derana: No new title. Last: ${currentTitle}`);
             return; 
         }
-        
-        // If there is already a pending post, ignore the new one for now.
-        const pendingRaw = await readKV(env, PENDING_ADADERANA_POST);
-        if (pendingRaw) {
-             console.log("New news found, but there is already a pending post. Skipping.");
-             return;
-        }
 
-        // --- Initial Details Scrape for description ---
-        const { description: initialDescription } = await reScrapeDetails(news.link);
+        // --- 1. Scrape Details (Description & Best Image URL) ---
+        const { description: initialDescription, imgUrl: originalImageUrl } = await reScrapeDetails(news.link);
+        
         let cleanDescription = initialDescription.startsWith(news.title) ? initialDescription.substring(news.title.length).trim() : initialDescription;
 
-        // 🚨 NEW CHANGE 1: Remove author credits
         cleanDescription = removeAuthorCredit(cleanDescription); 
-        
-        // 🚨 NEW CHANGE 2: Decorate description with line emojis
         const decoratedDescription = decorateDescriptionWithEmojis(cleanDescription); 
-
-        // 🚨 NEW CHANGE 3: Add Bold CTA
-        const ctaLine = toUnicodeBold("ඔබේ අදහස කුමක්ද?"); // CTA එක Bold කර ඇත
-
-        // Build the raw caption string - ADDING DOUBLE ANGLE QUOTES FOR VISUAL EMPHASIS ON TITLE
+        
+        const ctaLine = toUnicodeBold("ඔබේ අදහස කුමක්ද?"); 
+        
         const rawCaption = `«${news.title}»\n\n${decoratedDescription}\n\n` + 
                            `👇 ${ctaLine} 👇\n\n` +  
                            `#SriLanka #CDHNews #BreakingNews`;
         
-        // --- New PENDING Post Creation ---
-        const pendingPost = {
-            title: news.title,
-            link: news.link,
-            description: cleanDescription,
-            initialImgUrl: news.imgUrl, // The thumbnail/initial URL
-            retries: 0,
-            timestamp: moment().tz(COLOMBO_TIMEZONE).toISOString(),
-            // 🚨 CHANGE: Apply Unicode Bold (will bold hashtags/Latin letters only)
-            caption: toUnicodeBold(rawCaption)
-        };
-        
-        // Save to PENDING KV and notify owner, then STOP
-        await writeKV(env, PENDING_ADADERANA_POST, JSON.stringify(pendingPost));
-        
-        const telegramMessage = `✅ <b>Ada Derana New Post Found! (Image Pending)</b>\n\n` +
-                                `<b>Title:</b> ${news.title}\n` +
-                                `<b>Link:</b> <a href="${news.link}">View Article</a>\n\n` +
-                                `Bot will retry checking image validity (${MAX_RETRIES} times). Post is currently held in queue.`;
+        const finalSinhalaCaption = toUnicodeBold(rawCaption);
 
-        await sendRawTelegramMessage(BOT_OWNER_ID, telegramMessage, news.imgUrl, null);
+        // --- 2. Translate Title to English (using ChatGPT) ---
+        const englishHeadline = await translateText(env, news.title);
+
+        if (!englishHeadline) {
+             throw new Error(`Headline translation failed for: ${news.title}`);
+        }
+        
+        // --- 3. Generate AI Image (using DALL-E) ---
+        let finalImageUrl = DEFAULT_FALLBACK_IMAGE_URL; 
+        
+        // Original image URL is mostly ignored by DALL-E 3, but the presence of the link
+        // indicates if we should attempt AI generation or just use the static fallback.
+        if (originalImageUrl) {
+            const aiGeneratedUrl = await generateImageWithAI(env, englishHeadline, originalImageUrl);
+            if (aiGeneratedUrl) {
+                finalImageUrl = aiGeneratedUrl;
+            } else {
+                console.warn("AI Image generation failed. Falling back to the static image.");
+            }
+        } else {
+             console.warn("No original image URL found. Skipping AI generation and using static image.");
+        }
+        
+        // --- 4. Post to Facebook ---
+        await postNewsWithImageToFacebook(finalSinhalaCaption, finalImageUrl, env);
+        
+        // --- 5. Update KV and Notify Owner ---
+        await writeKV(env, LAST_ADADERANA_TITLE_KEY, news.title);
+        
+        const telegramMessage = `✅ <b>SUCCESS!</b> Ada Derana Post for "${news.title}" successful.\n(Image generated using AI headline: ${englishHeadline}).\n\n<b>Final Image URL:</b> <a href="${finalImageUrl}">View Image</a>\n<b>Link:</b> <a href="${news.link}">View Article</a>`;
+        await sendRawTelegramMessage(BOT_OWNER_ID, telegramMessage, finalImageUrl, null);
         
     } catch (error) {
         const errorTime = moment().tz(COLOMBO_TIMEZONE).format('YYYY-MM-DD hh:mm A');
@@ -567,7 +633,7 @@ async function checkForNewAdaDeranaNews(env) {
         await writeKV(env, LAST_ERROR_KEY, errorMessage);
         await writeKV(env, LAST_ERROR_TIMESTAMP, errorTime);
         
-         await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, `❌ <b>CRITICAL ERROR!</b> Ada Derana Check Failed.\n\nTime: ${errorTime}\n\nError: <code>${error.message}</code>`, null);
+         await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, `❌ <b>CRITICAL ERROR!</b> Ada Derana Check Failed (Translation/AI Failure).\n\nTime: ${errorTime}\n\nError: <code>${error.message}</code>`, null);
     }
 }
 
@@ -577,27 +643,19 @@ async function checkForNewAdaDeranaNews(env) {
 // =================================================================
 
 /**
- * Generates the Admin status message. (Includes Pending Post info)
+ * Generates the Admin status message. 
  */
 async function generateBotStatusMessage(env) {
     const lastError = await readKV(env, LAST_ERROR_KEY);
     const errorTime = await readKV(env, LAST_ERROR_TIMESTAMP);
     const lastCheckedTitle = await readKV(env, LAST_ADADERANA_TITLE_KEY);
-    const pendingRaw = await readKV(env, PENDING_ADADERANA_POST);
-    const pending = pendingRaw ? JSON.parse(pendingRaw) : null;
 
 
     let statusMessage = `🤖 <b>BOT SYSTEM STATUS (ADMIN VIEW)</b> 🤖\n\n`;
     statusMessage += `✅ <b>KV Binding:</b> ${env.NEWS_STATE ? 'OK (Active)' : '❌ FAIL (Missing)'}\n`;
     
-    if (pending) {
-        statusMessage += `⏳ <b>PENDING POST:</b> ${pending.title}\n`;
-        statusMessage += `   - Link: <a href="${pending.link}">View</a>\n`;
-        statusMessage += `   - Retries: ${pending.retries}/${MAX_RETRIES}\n\n`;
-    } else {
-        statusMessage += `✅ <b>PENDING POST:</b> None\n`;
-        statusMessage += `📰 <b>Last Posted Title:</b> ${lastCheckedTitle ? `<code>${lastCheckedTitle}</code>` : 'None'}\n\n`;
-    }
+    statusMessage += `✅ <b>AI Mode:</b> Active (OpenAI/DALL-E)\n`; 
+    statusMessage += `📰 <b>Last Posted Title:</b> ${lastCheckedTitle ? `<code>${lastCheckedTitle}</code>` : 'None'}\n\n`;
 
 
     if (lastError) {
@@ -704,7 +762,6 @@ async function handleTelegramUpdate(update, env) {
                 await env.NEWS_STATE.delete(LAST_ADADERANA_TITLE_KEY);
                 await env.NEWS_STATE.delete(LAST_ERROR_KEY);
                 await env.NEWS_STATE.delete(LAST_ERROR_TIMESTAMP);
-                await env.NEWS_STATE.delete(PENDING_ADADERANA_POST); 
             }
             
             const resetMessage = `✅ <b>KV මතකය සාර්ථකව යළි පිහිටුවන ලදී!</b>\nසියලුම පුවත් සහ දෝෂ සටහන් ඉවත් කර ඇත.`;
@@ -719,7 +776,6 @@ async function handleTelegramUpdate(update, env) {
     
     
     // --- 🚨 MANUAL FACEBOOK POSTING LOGIC (Owner Only) 🚨 ---
-    // Check if it's a message (not a callback) and if the user is the owner, and if it's not a recognized command
     if (isOwner && update.message && !command.startsWith('/')) {
         
         let caption = update.message.text || update.message.caption || '';
@@ -728,7 +784,6 @@ async function handleTelegramUpdate(update, env) {
         let contentType = 'Text';
 
         if (update.message.photo) {
-            // Get the largest photo size
             fileId = update.message.photo.pop().file_id;
             contentType = 'Photo';
         } else if (update.message.video) {
@@ -741,7 +796,6 @@ async function handleTelegramUpdate(update, env) {
                 mediaUrl = await getTelegramFileUrl(fileId);
                 
                 if (mediaUrl) {
-                    // Manual post cleanup and decoration
                     let cleanCaption = removeAuthorCredit(caption);
                     const decoratedDescription = decorateDescriptionWithEmojis(cleanCaption);
                     const ctaLine = toUnicodeBold("ඔබේ අදහස කුමක්ද?");
@@ -751,18 +805,14 @@ async function handleTelegramUpdate(update, env) {
                               `#CDHNews #ManualPost`;
                               
                 } else {
-                    // Failed to get URL, post as text only
                     caption = `📣 **Manual Post (File Fetch Failed!)**\n\n${caption}\n\n#CDHNews`;
                 }
 
             } else if (!caption) {
-                // Ignore empty messages without media
                 await sendRawTelegramMessage(chatId, "⚠️ **Manual Post Failed:** Cannot post an empty message without media.", null, null, messageId);
-                return new Response('OK', { status: 200 }); // Stop processing
+                return new Response('OK', { status: 200 }); 
             }
             
-            // Post to Facebook
-            // Convert to Unicode bold before posting manually
             const finalCaption = toUnicodeBold(caption);
             await postNewsWithImageToFacebook(finalCaption, mediaUrl, env);
 
@@ -790,9 +840,6 @@ async function handleTelegramUpdate(update, env) {
 // =================================================================
 
 async function handleScheduledTasks(env) {
-    // 1. Always try to resolve the pending post first
-    await checkAndResolvePendingPost(env);
-    // 2. Then check for new news (which creates a new pending post)
     await checkForNewAdaDeranaNews(env); 
 }
 
