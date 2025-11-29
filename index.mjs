@@ -35,6 +35,12 @@ const LAST_ERROR_KEY = 'last_critical_error';
 const LAST_ERROR_TIMESTAMP = 'last_error_time'; 
 const LAST_ADADERANA_TITLE_KEY = 'last_adaderana_title'; 
 
+// --- NEW CONSTANTS FOR MANUAL APPROVAL ---
+const APPROVAL_KEYWORDS = [
+    'මනුසත් දෙරණ', 'දෙරණ', 'Ada derana', 'derana', 'tv derana'
+];
+const PENDING_NEWS_KEY_PREFIX = 'PENDING_NEWS_';
+
 // --- START MESSAGE CONSTANTS (Telegram handler සඳහා) ---
 const RAW_START_CAPTION_SI = `👋 <b>ආයුබෝවන්!</b>\n\n` +
                              `💁‍♂️ මේ BOT මගින් ඔබගේ <b>CDH News</b> Facebook පිටුව වෙත <b>Ada Derana</b> හි නවතම පුවත් ස්වයංක්‍රීයව පළ කෙරේ.\n\n` +
@@ -155,7 +161,6 @@ async function callGeminiAPI(env, model, bodyPayload) {
 
 /**
  * Translates Sinhala text to English using Gemini.
- * FIX: Increased maxOutputTokens to the maximum value (2048) to prevent MAX_TOKENS truncation error.
  */
 async function translateText(env, sinhalaText) {
     const model = 'gemini-2.5-flash';
@@ -165,7 +170,7 @@ async function translateText(env, sinhalaText) {
         ],
         generationConfig: { 
             temperature: 0.1,
-            maxOutputTokens: 2048, // <--- FIX: Increased from 500 to 2048 (Maximum)
+            maxOutputTokens: 2048, 
         }
     };
 
@@ -200,6 +205,7 @@ async function translateText(env, sinhalaText) {
 
 /**
  * Generates the customized news alert image using the conceptual Imagen API.
+ * FIX: Removed invalid 'imageGenerationConfig' from the payload.
  */
 async function generateImageWithAI(env, englishHeadline, originalImageUrl) {
     const today = moment().tz(COLOMBO_TIMEZONE).format('YYYY-MM-DD');
@@ -208,19 +214,17 @@ async function generateImageWithAI(env, englishHeadline, originalImageUrl) {
         .replace('[DATE_PLACEHOLDER]', today)
         .replace('[HEADLINE_PLACEHOLDER]', englishHeadline);
 
+    // 🚨 FIX: Removed imageGenerationConfig which was causing the 400 error.
     const bodyPayload = {
         contents: [
             { role: "user", parts: [{ text: finalPrompt }] }
-        ],
-        // Conceptual config for image generation
-        imageGenerationConfig: { 
-            numberOfImages: 1,
-            aspectRatio: "1:1",
-        }
+        ]
+        // imageGenerationConfig has been removed as it is not a valid parameter for the Generative API endpoint
     };
 
     try {
         // Model choice is conceptual
+        // Although the model is 'imagen-3.0-generate-002', the response is conceptual/mocked below.
         const result = await callGeminiAPI(env, 'imagen-3.0-generate-002', bodyPayload);
         
         // Placeholder for a successfully generated image URL
@@ -263,13 +267,15 @@ async function readKV(env, key) {
 /**
  * Writes data to the KV Namespace.
  */
-async function writeKV(env, key, value) {
+async function writeKV(env, key, value, options = {}) {
     try {
         if (!env.NEWS_STATE) {
             console.error("KV Binding 'NEWS_STATE' is missing in ENV. Write failed.");
             return;
         }
-        await env.NEWS_STATE.put(key, String(value));  
+        // Use JSON.stringify if the value is an object for complex storage
+        const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        await env.NEWS_STATE.put(key, stringValue, options);  
     } catch (e) {
         console.error(`KV Write Error (${key}):`, e);
     }
@@ -536,6 +542,52 @@ async function reScrapeDetails(link) {
 // --- CORE SCHEDULING LOGIC (AI Integration) ---
 // =================================================================
 
+/**
+ * Executes the full workflow: Translation, Image Generation, Facebook Post, and KV update.
+ */
+async function executePostWorkflow(news, originalImageUrl, initialDescription, env) {
+    // --- 1. Preparation of Caption ---
+    let cleanDescription = initialDescription.startsWith(news.title) ? initialDescription.substring(news.title.length).trim() : initialDescription;
+    cleanDescription = removeAuthorCredit(cleanDescription); 
+    const decoratedDescription = decorateDescriptionWithEmojis(cleanDescription); 
+    const ctaLine = toUnicodeBold("ඔබේ අදහස කුමක්ද?"); 
+    
+    const rawCaption = `«${news.title}»\n\n${decoratedDescription}\n\n` + 
+                       `👇 ${ctaLine} 👇\n\n` +  
+                       `#SriLanka #CDHNews #BreakingNews`;
+    
+    const finalSinhalaCaption = toUnicodeBold(rawCaption);
+
+    // --- 2. Translate Title to English (using Gemini) ---
+    const englishHeadline = await translateText(env, news.title);
+
+    if (!englishHeadline) {
+         throw new Error(`Headline translation failed for: ${news.title}`);
+    }
+    
+    // --- 3. Generate AI Image (using Imagen) ---
+    let finalImageUrl = DEFAULT_FALLBACK_IMAGE_URL; 
+    
+    if (originalImageUrl) {
+        const aiGeneratedUrl = await generateImageWithAI(env, englishHeadline, originalImageUrl);
+        if (aiGeneratedUrl) {
+            finalImageUrl = aiGeneratedUrl;
+        } else {
+            console.warn("AI Image generation failed. Falling back to the static image.");
+        }
+    } else {
+         console.warn("No original image URL found. Skipping AI generation and using static image.");
+    }
+    
+    // --- 4. Post to Facebook ---
+    await postNewsWithImageToFacebook(finalSinhalaCaption, finalImageUrl, env);
+    
+    // --- 5. Update KV and Notify Owner (Only update KV if the post was successful) ---
+    await writeKV(env, LAST_ADADERANA_TITLE_KEY, news.title);
+    
+    const telegramMessage = `✅ <b>SUCCESS!</b> Ada Derana Post for "${news.title}" successful.\n(Image generated using AI headline: ${englishHeadline}).\n\n<b>Final Image URL:</b> <a href="${finalImageUrl}">View Image</a>\n<b>Link:</b> <a href="${news.link}">View Article</a>`;
+    await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, telegramMessage, finalImageUrl, null);
+}
 
 /**
  * Checks Ada Derana homepage for a new title. If found, translates, generates image, and posts immediately.
@@ -561,50 +613,50 @@ async function checkForNewAdaDeranaNews(env) {
         // --- 1. Scrape Details (Description & Best Image URL) ---
         const { description: initialDescription, imgUrl: originalImageUrl } = await reScrapeDetails(news.link);
         
-        let cleanDescription = initialDescription.startsWith(news.title) ? initialDescription.substring(news.title.length).trim() : initialDescription;
+        // --- 2. Keyword Check for Manual Approval ---
+        const combinedText = (news.title + " " + initialDescription).toLowerCase();
+        const needsApproval = APPROVAL_KEYWORDS.some(keyword => combinedText.includes(keyword.toLowerCase()));
 
-        cleanDescription = removeAuthorCredit(cleanDescription); 
-        const decoratedDescription = decorateDescriptionWithEmojis(cleanDescription); 
-        
-        const ctaLine = toUnicodeBold("ඔබේ අදහස කුමක්ද?"); 
-        
-        const rawCaption = `«${news.title}»\n\n${decoratedDescription}\n\n` + 
-                           `👇 ${ctaLine} 👇\n\n` +  
-                           `#SriLanka #CDHNews #BreakingNews`;
-        
-        const finalSinhalaCaption = toUnicodeBold(rawCaption);
+        if (needsApproval) {
+            // STOP AUTOMATIC FLOW, ASK FOR APPROVAL
+            const uniqueId = Date.now().toString(); // Use timestamp as unique ID
+            const pendingKey = PENDING_NEWS_KEY_PREFIX + uniqueId;
+            
+            // Store necessary data for later execution (use object store)
+            const pendingData = { 
+                newsTitle: news.title, 
+                newsLink: news.link, 
+                description: initialDescription, 
+                imageUrl: originalImageUrl 
+            };
+            
+            // Store for 1 hour (3600 seconds) - use options object
+            await writeKV(env, pendingKey, pendingData, { expirationTtl: 3600 });
+            
+            const approvalMessage = `🛑 **MANUAL APPROVAL REQUIRED** 🛑\n\n` +
+                                    `<b>Filter Alert:</b> A protected keyword was found in the headline/article. This post is currently blocked.\n\n` +
+                                    `<b>Headline:</b> ${news.title}\n` +
+                                    `<b>Link:</b> <a href="${news.link}">View Article</a>\n\n` +
+                                    `Do you wish to manually approve and post this item?`;
+            
+            const approvalKeyboard = { inline_keyboard: [
+                [{ text: '✅ Approve and Post', callback_data: `approve:${uniqueId}` }],
+                [{ text: '❌ Cancel Post', callback_data: `cancel:${uniqueId}` }]
+            ]};
+            
+            // Send message to the owner for approval
+            await sendRawTelegramMessage(BOT_OWNER_ID, approvalMessage, null, approvalKeyboard);
+            
+            // Important: Update KV with the current title to prevent re-triggering this item immediately.
+            await writeKV(env, LAST_ADADERANA_TITLE_KEY, news.title);
+            
+            console.log(`News requires manual approval: ${news.title}`);
+            return; // EXIT the function
 
-        // --- 2. Translate Title to English (using Gemini) ---
-        const englishHeadline = await translateText(env, news.title);
-
-        if (!englishHeadline) {
-             // Throw the error so the catch block handles the notification
-             throw new Error(`Headline translation failed for: ${news.title}`);
         }
-        
-        // --- 3. Generate AI Image (using Imagen) ---
-        let finalImageUrl = DEFAULT_FALLBACK_IMAGE_URL; 
-        
-        if (originalImageUrl) {
-            // Note: The generateImageWithAI is conceptual, but the rest of the flow is correct.
-            const aiGeneratedUrl = await generateImageWithAI(env, englishHeadline, originalImageUrl);
-            if (aiGeneratedUrl) {
-                finalImageUrl = aiGeneratedUrl;
-            } else {
-                console.warn("AI Image generation failed. Falling back to the static image.");
-            }
-        } else {
-             console.warn("No original image URL found. Skipping AI generation and using static image.");
-        }
-        
-        // --- 4. Post to Facebook ---
-        await postNewsWithImageToFacebook(finalSinhalaCaption, finalImageUrl, env);
-        
-        // --- 5. Update KV and Notify Owner ---
-        await writeKV(env, LAST_ADADERANA_TITLE_KEY, news.title);
-        
-        const telegramMessage = `✅ <b>SUCCESS!</b> Ada Derana Post for "${news.title}" successful.\n(Image generated using AI headline: ${englishHeadline}).\n\n<b>Final Image URL:</b> <a href="${finalImageUrl}">View Image</a>\n<b>Link:</b> <a href="${news.link}">View Article</a>`;
-        await sendRawTelegramMessage(BOT_OWNER_ID, telegramMessage, finalImageUrl, null);
+
+        // --- 3. If no approval needed, proceed with automatic post ---
+        await executePostWorkflow(news, originalImageUrl, initialDescription, env); 
         
     } catch (error) {
         const errorTime = moment().tz(COLOMBO_TIMEZONE).format('YYYY-MM-DD hh:mm A');
@@ -713,10 +765,11 @@ async function handleTelegramUpdate(update, env) {
         messageId = update.callback_query.message.message_id;
         text = update.callback_query.data;
         
+        // Answer the callback query to remove the loading state
         await fetch(`https://api.telegram.org/bot${HARDCODED_CONFIG.TELEGRAM_TOKEN}/answerCallbackQuery?callback_query_id=${update.callback_query.id}`);
     }
 
-    const command = update.message && update.message.text ? update.message.text.split(' ')[0].toLowerCase() : text.toLowerCase();
+    const command = update.message && update.message.text ? update.message.text.split(' ')[0].toLowerCase() : text.toLowerCase().split(':')[0];
     
     const isOwner = (userId === BOT_OWNER_ID);
 
@@ -755,6 +808,75 @@ async function handleTelegramUpdate(update, env) {
             
             await editTelegramMessage(chatId, messageId, resetMessage, backKeyboardReset);
             break;
+            
+        // --- MANUAL APPROVAL HANDLER ---
+        case 'approve':
+        case 'cancel':
+            if (!isOwner) {
+                 await sendRawTelegramMessage(chatId, "⚠️ Only the bot owner can use this feature.", null, null, messageId);
+                 return;
+            }
+            
+            const [action, uniqueId] = text.split(':');
+            const pendingKey = PENDING_NEWS_KEY_PREFIX + uniqueId;
+            
+            let pendingDataString = await readKV(env, pendingKey);
+            
+            if (!pendingDataString) {
+                const expiredMessage = `⚠️ **ERROR:** This pending post data has expired or was already processed.`;
+                await editTelegramMessage(chatId, messageId, expiredMessage);
+                return;
+            }
+            
+            // Delete key immediately to prevent double processing
+            await env.NEWS_STATE.delete(pendingKey);
+            
+            let pendingData;
+            try {
+                pendingData = JSON.parse(pendingDataString);
+            } catch(e) {
+                 const parseErrorMessage = `⚠️ **ERROR:** Failed to parse pending data.`;
+                 await editTelegramMessage(chatId, messageId, parseErrorMessage);
+                 return;
+            }
+            
+            const backKeyboard = { inline_keyboard: [
+                [{ text: '⬅️ Back to Admin Menu', callback_data: '/start' }]
+            ]};
+
+
+            if (action === 'approve') {
+                try {
+                    // Reconstruct news object for the workflow function
+                    const newsToPost = { title: pendingData.newsTitle, link: pendingData.newsLink };
+                    
+                    const approvalStartMessage = `⏳ **APPROVAL IN PROGRESS...**\n\nStarting translation and image generation for: <b>${pendingData.newsTitle}</b>`;
+                    await editTelegramMessage(chatId, messageId, approvalStartMessage);
+                    
+                    // EXECUTE FULL WORKFLOW
+                    await executePostWorkflow(newsToPost, pendingData.imageUrl, pendingData.description, env);
+                    
+                    const successMessage = `✅ **POST APPROVED & PUBLISHED** ✅\n\n` +
+                                           `Headline: <b>${pendingData.newsTitle}</b>\n` +
+                                           `Status: Successfully translated, generated image, and posted to Facebook.`;
+                    await editTelegramMessage(chatId, messageId, successMessage, backKeyboard);
+                    
+                } catch (e) {
+                    const failMessage = `❌ **APPROVAL FAILED!** ❌\n\n` +
+                                        `Headline: <b>${pendingData.newsTitle}</b>\n` +
+                                        `Error during posting: <code>${e.message.substring(0, 300)}...</code>`;
+                    await editTelegramMessage(chatId, messageId, failMessage, backKeyboard);
+                    console.error("Manual approval post failed:", e.stack);
+                }
+            } else if (action === 'cancel') {
+                 const cancelMessage = `❌ **POST CANCELLED** ❌\n\n` +
+                                       `Headline: <b>${pendingData.newsTitle}</b>\n` +
+                                       `Status: This post was successfully blocked and will not be sent to Facebook.`;
+                 await editTelegramMessage(chatId, messageId, cancelMessage, backKeyboard);
+            }
+            break; // End of approval handler
+
+        // ... rest of the command cases
     }
     
     
