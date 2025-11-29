@@ -100,45 +100,18 @@ function decorateDescriptionWithEmojis(description) {
 }
 
 // =================================================================
-// --- 🚨 GEMINI/IMAGEN API IMAGE GENERATION PROMPT & LOGIC 🚨 ---
+// --- 🚨 GEMINI API LOGIC (Translation Only) 🚨 ---
 // =================================================================
 
-const AI_IMAGE_PROMPT_TEMPLATE = `
-Create a professional Sri Lankan red news alert template in the exact same design and layout every time.
-Do NOT change the style, colors, fonts, borders, perspective, alignment, spacing or composition under any condition.
-The output MUST always keep the identical template.
-
-Permanent fixed layout instructions (never change):
-• Full red news studio background with globe + diagonal lines.
-• Top header: “CDH NEWS ALERT” in white and gold.
-• Top-left white date box: [DATE_PLACEHOLDER]
-• Center: place the content image (derived from the original news image and relevant to the headline) with a thin white border and a soft shadow. (The image should be placed perfectly in the center box).
-• Below the image: a wide red banner with the headline text in bold white capital letters: [HEADLINE_PLACEHOLDER]
-• Bottom left text: www.cdhnews.lk
-• Bottom center yellow strip: CDH NEWS
-• Output size MUST be square HD 1080x1080.
-• Always keep the same background, spacing, alignment and design style.
-
-Text rules: 
-• English text MUST be bold sans-serif block font, sharp and readable. 
-• Do NOT warp, curve or distort the text.
-
-Replace only: 
-• Date = [DATE_PLACEHOLDER]
-• Headline = [HEADLINE_PLACEHOLDER]
-
-Everything else MUST stay identical and unchanged every time.
-`;
-
 /**
- * Conceptual function to call the Gemini API for various tasks.
+ * Calls the Gemini API for text-based tasks (currently only Translation).
  */
 async function callGeminiAPI(env, model, bodyPayload) { 
     if (!env.GEMINI_API_KEY) {
         throw new Error("GEMINI_API_KEY is not configured in the environment.");
     }
 
-    // Note: The endpoint is generateContent, which supports text models and multimodal inputs.
+    // Endpoint for text generation
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
     
     const response = await fetch(endpoint, {
@@ -146,12 +119,11 @@ async function callGeminiAPI(env, model, bodyPayload) {
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify(bodyPayload), // Correctly serialize the full payload
+        body: JSON.stringify(bodyPayload), 
     });
 
     if (!response.ok) {
         const errorBody = await response.json();
-        // The error message is now captured here correctly
         throw new Error(`Gemini API Error (${model}): ${response.status} - ${JSON.stringify(errorBody)}`);
     }
 
@@ -203,34 +175,8 @@ async function translateText(env, sinhalaText) {
     }
 }
 
-/**
- * Generates the customized news alert image using the conceptual Imagen API.
- * FIX: Removed the failing conceptual API call entirely and replaced it with a mock URL return
- */
-async function generateImageWithAI(env, englishHeadline, originalImageUrl) {
-    const today = moment().tz(COLOMBO_TIMEZONE).format('YYYY-MM-DD');
-
-    let finalPrompt = AI_IMAGE_PROMPT_TEMPLATE
-        .replace('[DATE_PLACEHOLDER]', today)
-        .replace('[HEADLINE_PLACEHOLDER]', englishHeadline);
-
-    // 🚨 FIX: Removed the conceptual/failing API call to 'imagen-3.0-generate-002'. 
-    // The function now just simulates success and returns a mock URL to prevent the 404 error.
-    try {
-        console.log(`AI Image Generation prompt was conceptually created for: ${englishHeadline}`);
-        
-        // Placeholder for a successfully generated image URL
-        const generatedImageURL = `https://your-image-hosting-service.com/ai-image-${Date.now()}.jpg`;
-        
-        console.log(`AI Image Generation step simulated successfully: ${generatedImageURL}`);
-        return generatedImageURL;
-
-    } catch (e) {
-        console.error("AI Image Generation failed:", e.message);
-        return null; // Return null on failure
-    }
-}
-
+// 🚨 REMOVED generateImageWithAI FUNCTION: It was only returning a broken mock URL and causing the 404/324 errors. 
+// The image logic is now contained within executePostWorkflow for robust fallback handling.
 
 // =================================================================
 // --- UTILITY FUNCTIONS (KV, Telegram, Facebook) ---
@@ -278,6 +224,7 @@ async function writeKV(env, key, value, options = {}) {
  */
 async function postNewsWithImageToFacebook(caption, imageUrl, env) {
     
+    // Facebook requires a real URL for the /photos endpoint
     const isImagePost = (imageUrl && imageUrl.startsWith('http'));
     
     const endpoint = `https://graph.facebook.com/v19.0/${env.FACEBOOK_PAGE_ID}/${isImagePost ? 'photos' : 'feed'}`;
@@ -535,7 +482,7 @@ async function reScrapeDetails(link) {
 // =================================================================
 
 /**
- * Executes the full workflow: Translation, Image Generation, Facebook Post, and KV update.
+ * Executes the full workflow: Translation, Image Handling, Facebook Post, and KV update.
  */
 async function executePostWorkflow(news, originalImageUrl, initialDescription, env) {
     // --- 1. Preparation of Caption ---
@@ -551,25 +498,26 @@ async function executePostWorkflow(news, originalImageUrl, initialDescription, e
     const finalSinhalaCaption = toUnicodeBold(rawCaption);
 
     // --- 2. Translate Title to English (using Gemini) ---
+    // This step is kept as it is functional and provides the English headline for potential future AI use.
     const englishHeadline = await translateText(env, news.title);
 
     if (!englishHeadline) {
          throw new Error(`Headline translation failed for: ${news.title}`);
     }
     
-    // --- 3. Generate AI Image (using Imagen) ---
-    let finalImageUrl = DEFAULT_FALLBACK_IMAGE_URL; 
+    // --- 3. Determine Final Image URL ---
+    let finalImageUrl;
+    const postImageSource = originalImageUrl ? "Scraped Original" : "Static Fallback";
     
+    // 🚨 FIX: Use the actual scraped image URL if available, or the static fallback. 
+    // This bypasses the broken AI image generation mock which caused the 404/324 errors.
     if (originalImageUrl) {
-        const aiGeneratedUrl = await generateImageWithAI(env, englishHeadline, originalImageUrl);
-        if (aiGeneratedUrl) {
-            finalImageUrl = aiGeneratedUrl;
-        } else {
-            console.warn("AI Image generation failed (mocked). Falling back to the static image.");
-        }
+        finalImageUrl = originalImageUrl;
     } else {
-         console.warn("No original image URL found. Skipping AI generation and using static image.");
+        finalImageUrl = DEFAULT_FALLBACK_IMAGE_URL;
     }
+
+    console.warn(`AI Image generation skipped due to API errors. Using image source: ${postImageSource}`);
     
     // --- 4. Post to Facebook ---
     await postNewsWithImageToFacebook(finalSinhalaCaption, finalImageUrl, env);
@@ -577,7 +525,7 @@ async function executePostWorkflow(news, originalImageUrl, initialDescription, e
     // --- 5. Update KV and Notify Owner (Only update KV if the post was successful) ---
     await writeKV(env, LAST_ADADERANA_TITLE_KEY, news.title);
     
-    const telegramMessage = `✅ <b>SUCCESS!</b> Ada Derana Post for "${news.title}" successful.\n(Image generation step completed with AI headline: ${englishHeadline}).\n\n<b>Final Image URL:</b> <a href="${finalImageUrl}">View Image</a>\n<b>Link:</b> <a href="${news.link}">View Article</a>`;
+    const telegramMessage = `✅ <b>SUCCESS!</b> Ada Derana Post for "${news.title}" successful.\n(Headline translated: ${englishHeadline}).\n(Image used: ${postImageSource}).\n\n<b>Final Image URL:</b> <a href="${finalImageUrl}">View Image</a>\n<b>Link:</b> <a href="${news.link}">View Article</a>`;
     await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, telegramMessage, finalImageUrl, null);
 }
 
@@ -659,7 +607,7 @@ async function checkForNewAdaDeranaNews(env) {
         await writeKV(env, LAST_ERROR_TIMESTAMP, errorTime);
         
          // Send the notification message here
-         await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, `❌ <b>CRITICAL ERROR!</b> Ada Derana Check Failed (Translation/AI Failure).\n\nTime: ${errorTime}\n\nError: <code>${error.message}</code>`, null);
+         await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, `❌ <b>CRITICAL ERROR!</b> Ada Derana Check Failed (Translation/Posting Failure).\n\nTime: ${errorTime}\n\nError: <code>${error.message}</code>`, null);
     }
 }
 
@@ -680,8 +628,8 @@ async function generateBotStatusMessage(env) {
     let statusMessage = `🤖 <b>BOT SYSTEM STATUS (ADMIN VIEW)</b> 🤖\n\n`;
     statusMessage += `✅ <b>KV Binding:</b> ${env.NEWS_STATE ? 'OK (Active)' : '❌ FAIL (Missing)'}\n`;
     
-    // Updated AI Mode
-    statusMessage += `✅ <b>AI Mode:</b> Active (Gemini/Imagen - Mocked)\n`; 
+    // Updated Status: AI Image is OFF, Translation is ON
+    statusMessage += `⚙️ <b>AI Mode:</b> Translation (ON), Image Generation (OFF)\n`; 
     statusMessage += `📰 <b>Last Posted Title:</b> ${lastCheckedTitle ? `<code>${lastCheckedTitle}</code>` : 'None'}\n\n`;
 
 
@@ -842,7 +790,7 @@ async function handleTelegramUpdate(update, env) {
                     // Reconstruct news object for the workflow function
                     const newsToPost = { title: pendingData.newsTitle, link: pendingData.newsLink };
                     
-                    const approvalStartMessage = `⏳ **APPROVAL IN PROGRESS...**\n\nStarting translation and image generation for: <b>${pendingData.newsTitle}</b>`;
+                    const approvalStartMessage = `⏳ **APPROVAL IN PROGRESS...**\n\nStarting translation and posting for: <b>${pendingData.newsTitle}</b>`;
                     await editTelegramMessage(chatId, messageId, approvalStartMessage);
                     
                     // EXECUTE FULL WORKFLOW
@@ -850,7 +798,7 @@ async function handleTelegramUpdate(update, env) {
                     
                     const successMessage = `✅ **POST APPROVED & PUBLISHED** ✅\n\n` +
                                            `Headline: <b>${pendingData.newsTitle}</b>\n` +
-                                           `Status: Successfully translated, simulated image generation, and posted to Facebook.`;
+                                           `Status: Successfully translated and posted to Facebook.`;
                     await editTelegramMessage(chatId, messageId, successMessage, backKeyboard);
                     
                 } catch (e) {
