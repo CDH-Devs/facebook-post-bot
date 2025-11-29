@@ -155,7 +155,7 @@ async function callGeminiAPI(env, model, bodyPayload) {
 
 /**
  * Translates Sinhala text to English using Gemini.
- * FIX: Added robust checks for the result structure to prevent "reading '0' of undefined" errors.
+ * FIX: Increased maxOutputTokens to prevent MAX_TOKENS truncation error.
  */
 async function translateText(env, sinhalaText) {
     const model = 'gemini-2.5-flash';
@@ -165,14 +165,14 @@ async function translateText(env, sinhalaText) {
         ],
         generationConfig: { 
             temperature: 0.1,
-            maxOutputTokens: 100,
+            maxOutputTokens: 500, // <--- FIX: Increased from 100 to 500
         }
     };
 
     try {
         const result = await callGeminiAPI(env, model, bodyPayload);
         
-        // --- FIX: Robust checking for result structure ---
+        // --- Robust checking for result structure ---
         if (!result.candidates || result.candidates.length === 0) {
             console.warn("Gemini returned no candidates (Safety or quota issue?). Result:", JSON.stringify(result));
             return null;
@@ -181,8 +181,10 @@ async function translateText(env, sinhalaText) {
         const firstCandidate = result.candidates[0];
         const parts = firstCandidate.content?.parts;
 
+        // Check if the model stopped due to MAX_TOKENS or safety (finishReason)
         if (!parts || parts.length === 0) {
-             console.warn("Gemini candidate has no parts.", JSON.stringify(firstCandidate));
+             const finishReason = firstCandidate.finishReason || 'UNKNOWN';
+             console.warn(`Gemini candidate has no parts. Finish reason: ${finishReason}.`, JSON.stringify(firstCandidate));
              return null;
         }
 
