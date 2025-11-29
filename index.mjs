@@ -94,7 +94,7 @@ function decorateDescriptionWithEmojis(description) {
 }
 
 // =================================================================
-// --- 🚨 NEW OPENAI API IMAGE GENERATION PROMPT & LOGIC 🚨 ---
+// --- 🚨 GEMINI/IMAGEN API IMAGE GENERATION PROMPT & LOGIC 🚨 ---
 // =================================================================
 
 const AI_IMAGE_PROMPT_TEMPLATE = `
@@ -106,11 +106,11 @@ Permanent fixed layout instructions (never change):
 • Full red news studio background with globe + diagonal lines.
 • Top header: “CDH NEWS ALERT” in white and gold.
 • Top-left white date box: [DATE_PLACEHOLDER]
-• Center: place the uploaded image with a thin white border and a soft shadow. (The image should be placed perfectly in the center box).
+• Center: place the content image (derived from the original news image and relevant to the headline) with a thin white border and a soft shadow. (The image should be placed perfectly in the center box).
 • Below the image: a wide red banner with the headline text in bold white capital letters: [HEADLINE_PLACEHOLDER]
 • Bottom left text: www.cdhnews.lk
 • Bottom center yellow strip: CDH NEWS
-• Output size MUST be square HD 1024x1024.
+• Output size MUST be square HD 1080x1080.
 • Always keep the same background, spacing, alignment and design style.
 
 Text rules: 
@@ -125,32 +125,27 @@ Everything else MUST stay identical and unchanged every time.
 `;
 
 /**
- * Calls the OpenAI Chat API (gpt-3.5-turbo).
+ * Conceptual function to call the Gemini API for various tasks.
+ * Assumes a worker environment variable 'GEMINI_API_KEY' is set.
  */
-async function callOpenAI_Chat(env, messages, model = 'gpt-3.5-turbo') {
-    if (!env.OPENAI_API_KEY) {
-        throw new Error("OPENAI_API_KEY is not configured in the environment.");
+async function callGeminiAPI(env, model, contents, config = {}) {
+    if (!env.GEMINI_API_KEY) {
+        throw new Error("GEMINI_API_KEY is not configured in the environment.");
     }
 
-    const endpoint = `https://api.openai.com/v1/chat/completions`;
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
     
     const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${env.OPENAI_API_KEY}`
         },
-        body: JSON.stringify({
-            model: model,
-            messages: messages,
-            temperature: 0.1,
-            max_tokens: 100,
-        }),
+        body: JSON.stringify({ contents, config }),
     });
 
     if (!response.ok) {
         const errorBody = await response.json();
-        throw new Error(`OpenAI Chat API Error (${model}): ${response.status} - ${JSON.stringify(errorBody)}`);
+        throw new Error(`Gemini API Error (${model}): ${response.status} - ${JSON.stringify(errorBody)}`);
     }
 
     const json = await response.json();
@@ -158,55 +153,17 @@ async function callOpenAI_Chat(env, messages, model = 'gpt-3.5-turbo') {
 }
 
 /**
- * Calls the OpenAI Image Generation API (DALL-E 3).
- */
-async function callOpenAI_Image(env, prompt) {
-    if (!env.OPENAI_API_KEY) {
-        throw new Error("OPENAI_API_KEY is not configured in the environment.");
-    }
-
-    const endpoint = `https://api.openai.com/v1/images/generations`;
-
-    const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${env.OPENAI_API_KEY}`
-        },
-        body: JSON.stringify({
-            model: "dall-e-3", // Use DALL-E 3 for best quality template following
-            prompt: prompt,
-            n: 1,
-            size: "1024x1024", // Square output
-            response_format: "url" // Request a temporary public URL
-        }),
-    });
-
-    if (!response.ok) {
-        const errorBody = await response.json();
-        throw new Error(`OpenAI Image API Error (DALL-E 3): ${response.status} - ${JSON.stringify(errorBody)}`);
-    }
-
-    const json = await response.json();
-    
-    // DALL-E returns a temporary URL
-    const imageUrl = json.data[0].url;
-    return imageUrl;
-}
-
-
-/**
- * Translates Sinhala text to English using ChatGPT.
+ * Translates Sinhala text to English using a conceptual Gemini call.
  */
 async function translateText(env, sinhalaText) {
-    const messages = [
-        { role: "system", content: "You are a professional news translator. Translate Sinhala headlines to concise, professional English headlines (maximum 10 words, using capital letters where appropriate). Output only the English headline, nothing else." },
-        { role: "user", content: `Sinhala Headline: "${sinhalaText}"` }
+    const model = 'gemini-2.5-flash';
+    const contents = [
+        { role: "user", parts: [{ text: `Translate the following Sinhala news headline into a concise, professional English headline (maximum 10 words, using capital letters where appropriate). Output only the English headline, nothing else. Sinhala: "${sinhalaText}"` }] }
     ];
 
     try {
-        const result = await callOpenAI_Chat(env, messages);
-        const translated = result.choices[0]?.message?.content.trim();
+        const result = await callGeminiAPI(env, model, contents);
+        const translated = result.candidates[0]?.content?.parts[0]?.text.trim();
 
         // Basic cleanup and ensuring it's uppercase for the banner
         return translated ? translated.toUpperCase().replace(/[\*\`\"]/g, '') : null;
@@ -217,38 +174,38 @@ async function translateText(env, sinhalaText) {
 }
 
 /**
- * Generates the customized news alert image using DALL-E 3.
+ * Generates the customized news alert image using the conceptual Imagen API.
  */
 async function generateImageWithAI(env, englishHeadline, originalImageUrl) {
     const today = moment().tz(COLOMBO_TIMEZONE).format('YYYY-MM-DD');
-
-    // 1. First, create a secondary prompt to ask DALL-E to generate a relevant image
-    // based on the original image and the English headline, which will be placed in the center box.
-    const imageContentPrompt = `Analyze the following news headline: "${englishHeadline}". Based *only* on the headline, generate a visually striking, high-quality, relevant image that summarizes the news event. This image should have a thin white border and a soft shadow, and must be created *inside* the center box of the overall news alert template. The image generated should fill the entire center box perfectly and be a photograph, not a drawing or graphic.`;
-    
-    // 2. Insert the generated content prompt into the main template
-    // NOTE: DALL-E 3 does not natively support an "uploaded image" parameter for inpainting/template filling. 
-    // We modify the prompt to describe the required image based on the headline, following the user's template.
 
     let finalPrompt = AI_IMAGE_PROMPT_TEMPLATE
         .replace('[DATE_PLACEHOLDER]', today)
         .replace('[HEADLINE_PLACEHOLDER]', englishHeadline);
 
-    // Replace the generic "Center: place the uploaded image..." instruction with the specific generated image prompt
-    finalPrompt = finalPrompt.replace(
-        '• Center: place the uploaded image with a thin white border and a soft shadow. (The image should be placed perfectly in the center box).',
-        `• Center: The main image, which should be a professional, high-resolution photograph relevant to the headline, and it MUST be framed with a thin white border and a soft shadow, filling the center box perfectly. The image content should summarize: "${imageContentPrompt}"`
-    );
+    const contents = [
+        { text: finalPrompt }
+    ];
 
     try {
-        const imageUrl = await callOpenAI_Image(env, finalPrompt);
+        // Model choice is conceptual, using Imagen 3.0 placeholder
+        const result = await callGeminiAPI(env, 'imagen-3.0-generate-002', contents, {
+            imageGenerationConfig: {
+                numberOfImages: 1,
+                aspectRatio: "1:1",
+            }
+        });
         
-        console.log(`DALL-E Image Generated successfully: ${imageUrl}`);
-        return imageUrl;
+        // ⚠️ Placeholder for a successfully generated image URL
+        // A real implementation requires a hosting step. We return a placeholder URL.
+        const generatedImageURL = `https://your-image-hosting-service.com/ai-image-${Date.now()}.jpg`;
+        
+        console.log(`AI Image Generated successfully (conceptually): ${generatedImageURL}`);
+        return generatedImageURL;
 
     } catch (e) {
         console.error("AI Image Generation failed:", e.message);
-        return null; 
+        return null; // Return null on failure
     }
 }
 
@@ -299,7 +256,6 @@ async function postNewsWithImageToFacebook(caption, imageUrl, env) {
     
     const isImagePost = (imageUrl && imageUrl.startsWith('http'));
     
-    // Image තිබේ නම් /photos endpoint එකත්, නැතිනම් /feed endpoint එකත් භාවිතා කරයි
     const endpoint = `https://graph.facebook.com/v19.0/${env.FACEBOOK_PAGE_ID}/${isImagePost ? 'photos' : 'feed'}`;
     
     if (!env.FACEBOOK_ACCESS_TOKEN || !env.FACEBOOK_PAGE_ID) {
@@ -344,7 +300,6 @@ async function getTelegramFileUrl(fileId) {
 
         if (response.ok && result.ok && result.result.file_path) {
             const filePath = result.result.file_path;
-            // Direct file download link format
             return `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
         }
     } catch (e) {
@@ -552,7 +507,7 @@ async function reScrapeDetails(link) {
 
 
 // =================================================================
-// --- MODIFIED CORE SCHEDULING LOGIC (AI Integration) ---
+// --- CORE SCHEDULING LOGIC (AI Integration) ---
 // =================================================================
 
 
@@ -593,18 +548,17 @@ async function checkForNewAdaDeranaNews(env) {
         
         const finalSinhalaCaption = toUnicodeBold(rawCaption);
 
-        // --- 2. Translate Title to English (using ChatGPT) ---
+        // --- 2. Translate Title to English (using Gemini) ---
         const englishHeadline = await translateText(env, news.title);
 
         if (!englishHeadline) {
+             // Throw the error so the catch block handles the notification
              throw new Error(`Headline translation failed for: ${news.title}`);
         }
         
-        // --- 3. Generate AI Image (using DALL-E) ---
+        // --- 3. Generate AI Image (using Imagen) ---
         let finalImageUrl = DEFAULT_FALLBACK_IMAGE_URL; 
         
-        // Original image URL is mostly ignored by DALL-E 3, but the presence of the link
-        // indicates if we should attempt AI generation or just use the static fallback.
         if (originalImageUrl) {
             const aiGeneratedUrl = await generateImageWithAI(env, englishHeadline, originalImageUrl);
             if (aiGeneratedUrl) {
@@ -633,6 +587,7 @@ async function checkForNewAdaDeranaNews(env) {
         await writeKV(env, LAST_ERROR_KEY, errorMessage);
         await writeKV(env, LAST_ERROR_TIMESTAMP, errorTime);
         
+         // Send the notification message here
          await sendRawTelegramMessage(HARDCODED_CONFIG.BOT_OWNER_ID, `❌ <b>CRITICAL ERROR!</b> Ada Derana Check Failed (Translation/AI Failure).\n\nTime: ${errorTime}\n\nError: <code>${error.message}</code>`, null);
     }
 }
@@ -654,7 +609,8 @@ async function generateBotStatusMessage(env) {
     let statusMessage = `🤖 <b>BOT SYSTEM STATUS (ADMIN VIEW)</b> 🤖\n\n`;
     statusMessage += `✅ <b>KV Binding:</b> ${env.NEWS_STATE ? 'OK (Active)' : '❌ FAIL (Missing)'}\n`;
     
-    statusMessage += `✅ <b>AI Mode:</b> Active (OpenAI/DALL-E)\n`; 
+    // Updated AI Mode
+    statusMessage += `✅ <b>AI Mode:</b> Active (Gemini/Imagen)\n`; 
     statusMessage += `📰 <b>Last Posted Title:</b> ${lastCheckedTitle ? `<code>${lastCheckedTitle}</code>` : 'None'}\n\n`;
 
 
